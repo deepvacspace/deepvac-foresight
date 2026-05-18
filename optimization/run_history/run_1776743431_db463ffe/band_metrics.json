@@ -1,0 +1,48 @@
+{
+    "run_id":  "run_1776743431_db463ffe",
+    "records":  [
+                    {
+                        "run_id":  "run_1776743431_db463ffe",
+                        "band":  "far",
+                        "kp":  5.0,
+                        "ki":  858.0,
+                        "kd":  23.0,
+                        "cost":  31.54591674238271,
+                        "n_samples":  173,
+                        "start_temp":  27.32929420471192,
+                        "target_temp":  0.0,
+                        "duration_s":  1197.3944461345673,
+                        "far_mae":  20.002837192116445,
+                        "time_to_reach_mid_band":  384.76931834220886
+                    },
+                    {
+                        "run_id":  "run_1776743431_db463ffe",
+                        "band":  "mid",
+                        "kp":  10.0,
+                        "ki":  242.0,
+                        "kd":  49.0,
+                        "cost":  6.119095574778871,
+                        "n_samples":  14,
+                        "start_temp":  27.32929420471192,
+                        "target_temp":  0.0,
+                        "duration_s":  1197.3944461345673,
+                        "mid_mae":  6.025477749960763,
+                        "approach_speed":  0.06241188321207194
+                    },
+                    {
+                        "run_id":  "run_1776743431_db463ffe",
+                        "band":  "near",
+                        "kp":  21.0,
+                        "ki":  280.0,
+                        "kd":  50.0,
+                        "cost":  17.722659817640867,
+                        "n_samples":  350,
+                        "start_temp":  27.32929420471192,
+                        "target_temp":  0.0,
+                        "duration_s":  1197.3944461345673,
+                        "tail_mae":  1.0897198185991885,
+                        "jitter_std":  0.32583244278304396,
+                        "overshoot":  1.2936560638178138
+                    }
+                ]
+}

@@ -25,7 +25,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--history-dir",
-        default=str(Path(__file__).parent / "history"),
+        default=str(Path(__file__).parent / "run_history"),
         help="Directory containing run summaries like run_summary.csv and run_summary.csv",
     )
     parser.add_argument(

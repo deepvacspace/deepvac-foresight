@@ -42,7 +42,7 @@ RUN_FILE_SPECS = (
     ("val_*", "run_samples.csv"),
 )
 
-HISTORY_DIR = Path(__file__).parents[1] / "optimization" / "history"
+HISTORY_DIR = Path(__file__).parents[1] / "optimization" / "run_history"
 PLOT_DIR = Path(__file__).parent / "plots"
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -12,11 +12,13 @@ python simulate_runs.py --candidate-mode grid \
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import itertools
 import json
 import math
 import random
 import sys
+import uuid
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -119,7 +121,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--w-tail-mae", type=float, default=1.0)
     ap.add_argument("--w-overshoot-rmse", type=float, default=10.0)
-    ap.add_argument("--w-overshoot-max", type=float, default=2.0)
+    ap.add_argument("--w-overshoot-max", type=float, default=10.0)
     ap.add_argument("--w-tail-std", type=float, default=0.5)
     ap.add_argument("--w-final-error", type=float, default=0.5)
     ap.add_argument("--w-time-to-near", type=float, default=0.001)
@@ -583,25 +585,21 @@ def compute_metrics(
     overshoot_rmse = float(np.sqrt(np.mean(np.square(overshoot))))
     final_error = float(error[-1])
     final_abs_error = abs(final_error)
-    control_abs_mean = float(np.mean(np.abs(controls)))
-
-    score = (
+    cost = (
         float(args.w_tail_mae) * tail_mae
-        + float(args.w_overshoot_rmse) * overshoot_rmse
         + float(args.w_overshoot_max) * overshoot_max
         + float(args.w_tail_std) * tail_std
         + float(args.w_final_error) * final_abs_error
-        + float(args.w_time_to_near) * time_to_near
     )
     if not valid:
-        score += float(args.w_invalid)
+        cost += float(args.w_invalid)
 
     return {
         "candidate_id": int(candidate_id),
         "kp": float(kp),
         "ki": float(ki),
         "kd": float(kd),
-        "score": float(score),
+        "cost": float(cost),
         "valid": bool(valid),
         "invalid_reason": invalid_reason,
         "tail_mae": tail_mae,
@@ -614,23 +612,19 @@ def compute_metrics(
         "time_to_near_s": time_to_near,
         "time_to_settle_s": time_to_settle,
         "mae_full": float(np.mean(abs_error)),
-        "p90_abs_error_full": float(np.quantile(abs_error, 0.90)),
-        "max_abs_error_full": float(np.max(abs_error)),
         "min_temp": float(np.min(temps)),
         "max_temp": float(np.max(temps)),
         "end_temp": float(temps[-1]),
-        "control_abs_mean": control_abs_mean,
     }
 
 
 def print_top(ranking: pd.DataFrame, top_n: int) -> None:
     cols = [
-        "rank", "kp", "ki", "kd", "score", "tail_mae", "overshoot_max",
-        "overshoot_rmse", "tail_std", "final_abs_error", "time_to_near_s",
-        "end_temp", "valid",
+        "rank", "kp", "ki", "kd", "cost", "tail_mae", "overshoot_max",
+        "tail_std", "final_abs_error", "end_temp",
     ]
     print("\n=== Top candidate PID tests ===")
-    print(ranking.head(top_n)[cols].to_string(
+    print(ranking.head(min(10, top_n))[cols].to_string(
         index=False, float_format=lambda x: f"{x:.4f}"))
 
 
@@ -640,7 +634,8 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    output_dir = Path(args.output_dir)
+    run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    output_dir = Path(args.output_dir) / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available()
@@ -665,6 +660,7 @@ def main() -> None:
     print(f"candidate mode:  {args.candidate_mode}")
     print(f"candidates:      {n_candidates}")
     print(f"PID temp mode:   {args.pid_substep_temp_mode}")
+    print(f"run id:          {run_id}")
     print(f"output dir:      {output_dir}")
 
     rows: List[Dict[str, float]] = []
@@ -688,13 +684,24 @@ def main() -> None:
         rows.append(metrics)
 
     ranking = pd.DataFrame(rows).sort_values(
-        ["valid", "score", "tail_mae", "overshoot_max"],
+        ["valid", "cost", "tail_mae", "overshoot_max"],
         ascending=[False, True, True, True],
     ).reset_index(drop=True)
     ranking.insert(0, "rank", np.arange(1, len(ranking) + 1, dtype=int))
 
+    public_ranking = ranking.drop(
+        columns=[
+            "control_abs_mean",
+            "max_abs_error_full",
+            "p90_abs_error_full",
+            "invalid_reason",
+            "valid",
+        ],
+        errors="ignore",
+    )
+
     ranking_csv = output_dir / "planned_pid_candidate_ranking.csv"
-    ranking.to_csv(ranking_csv, index=False)
+    public_ranking.to_csv(ranking_csv, index=False)
 
     top_traj_csv = None
     if int(args.save_top_trajectories) > 0:
@@ -739,17 +746,16 @@ def main() -> None:
             "ki": [float(args.ki_min), float(args.ki_max)],
             "kd": [float(args.kd_min), float(args.kd_max)],
         },
-        "score_weights": {
+        "run_id": run_id,
+        "cost_weights": {
             "tail_mae": float(args.w_tail_mae),
-            "overshoot_rmse": float(args.w_overshoot_rmse),
             "overshoot_max": float(args.w_overshoot_max),
             "tail_std": float(args.w_tail_std),
             "final_error": float(args.w_final_error),
-            "time_to_near": float(args.w_time_to_near),
         },
         "ranking_csv": str(ranking_csv),
         "top_trajectories_csv": str(top_traj_csv) if top_traj_csv else None,
-        "top_candidates": ranking.head(int(args.top_n)).to_dict(orient="records"),
+        "top_candidates": public_ranking.head(10).to_dict(orient="records"),
     }
     summary_json = output_dir / "planned_pid_summary.json"
     with open(summary_json, "w", encoding="utf-8") as f:

@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 WORK_DIR = ROOT / "optimization"
-DEFAULT_HISTORY_ROOT = WORK_DIR / "history"
+DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_t1"
 DEFAULT_PLOTS_DIR = Path(__file__).resolve().parent / "plots_t1"
 

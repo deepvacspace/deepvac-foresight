@@ -30,7 +30,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--history-root",
-        default=str(Path(__file__).with_name("history")),
+        default=str(Path(__file__).with_name("run_history")),
         help="History folder containing one subfolder per run.",
     )
     ap.add_argument(

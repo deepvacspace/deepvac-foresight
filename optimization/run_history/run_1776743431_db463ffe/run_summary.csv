@@ -1,0 +1,2 @@
+"run_id","start_ts","end_ts","duration_s","num_samples","start_temp","temp_ref","pid_source","far_kp","far_ki","far_kd","mid_kp","mid_ki","mid_kd","near_kp","near_ki","near_kd","mse","mae","cost","tail_mae","overshoot"
+"run_1776743431_db463ffe","1776743917.0926688","1776745116.6977324","1199.605063676834","538","27.329294204711914","0.0","random-band-ranges","5","858","23","10","242","49","21","280","50","145.6880462063571","7.776554975367834","107.28108312158042","1.690017026754526","3.0340218544006348"

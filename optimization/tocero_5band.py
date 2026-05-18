@@ -43,6 +43,7 @@ PID_SCHEDULES = [
 ]
 
 def build_arg_parser() -> argparse.ArgumentParser:
+	output_dir = Path(__file__).with_name("output")
 	ap = argparse.ArgumentParser()
 
 	ap.add_argument("--num-tests", type=int, default=15)
@@ -121,7 +122,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--history-root", default="history5")
 	ap.add_argument("--samples-csv", default="run_samples.csv")
 	ap.add_argument("--runs-csv", default="run_summary.csv")
-	ap.add_argument("--all-runs-csv", default="history/bo_all_runs.csv")
+	ap.add_argument("--all-runs-csv", default=str(output_dir / "bo_all_runs.csv"))
 
 	return ap
 

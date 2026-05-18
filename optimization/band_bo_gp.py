@@ -22,6 +22,7 @@ from sklearn.preprocessing import StandardScaler
 
 
 BANDS = ("far", "mid", "near")
+OUTPUT_DIR = Path(__file__).with_name("output")
 COEF_COLS = ("kp", "ki", "kd")
 REQUIRED_COLS = ("timestamp", "kp", "ki", "kd", "temp", "temp_ref")
 
@@ -31,7 +32,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Train separate GP BO models for far/mid/near PID coefficient triplets."
     )
 
-    ap.add_argument("--history-root", default="history",
+    ap.add_argument("--history-root", default="run_history",
                     help="Root folder for runs.")
     ap.add_argument(
         "--telemetry-names",
@@ -92,9 +93,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--per-run-metrics-csv", default="band_metrics.csv")
     ap.add_argument("--per-run-metrics-json", default="band_metrics.json")
-    ap.add_argument("--models-out", default="history/band_gp_models.pkl")
-    ap.add_argument("--next-out", default="history/band_bo_next_params.json")
-    ap.add_argument("--suggestions-dir", default="history/band_bo_suggestions")
+    ap.add_argument("--models-out", default=str(OUTPUT_DIR / "band_gp_models.pkl"))
+    ap.add_argument("--next-out", default=str(OUTPUT_DIR / "band_bo_next_params.json"))
+    ap.add_argument("--suggestions-dir", default=str(OUTPUT_DIR / "band_bo_suggestions"))
 
     return ap
 
@@ -514,7 +515,7 @@ def compute_run_band_metrics(
 
         records.append(rec)
 
-    # Save inside the run folder.
+    # Keep per-run derived metrics next to the run's samples and summary.
     metrics_csv = run_dir / args.per_run_metrics_csv
     metrics_json = run_dir / args.per_run_metrics_json
 

@@ -18,7 +18,7 @@ from lstm import (
     transform_features,
 )
 
-DEFAULT_HISTORY_DIR = Path(__file__).parents[1] / "optimization" / "history"
+DEFAULT_HISTORY_DIR = Path(__file__).parents[1] / "optimization" / "run_history"
 DEFAULT_PLOT_DIR = Path(__file__).parent / "plots"
 
 
@@ -29,7 +29,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--history-dir",
         type=str,
         default=str(DEFAULT_HISTORY_DIR),
-        help="Directory containing run sample folders. Defaults to optimization/history.",
+        help="Directory containing run sample folders. Defaults to optimization/run_history.",
     )
 
     parser.add_argument(

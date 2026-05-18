@@ -1,0 +1,2 @@
+"run_id","start_ts","end_ts","duration_s","num_samples","start_temp","temp_ref","pid_source","far_kp","far_ki","far_kd","mid_kp","mid_ki","mid_kd","near_kp","near_ki","near_kd","mse","mae"
+"run_1777153929_517947be","1777154411.1266985","1777155610.6145554","1199.4878568649292","600","27.240333557128906","0.0","band_gp_bo","6","373","0","10","694","8","16","105","56","145.3270272272044","7.181735938299877"

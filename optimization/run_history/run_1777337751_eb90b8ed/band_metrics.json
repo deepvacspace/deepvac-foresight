@@ -1,0 +1,48 @@
+{
+    "run_id":  "run_1777337751_eb90b8ed",
+    "records":  [
+                    {
+                        "run_id":  "run_1777337751_eb90b8ed",
+                        "band":  "far",
+                        "kp":  7.0,
+                        "ki":  674.0,
+                        "kd":  15.0,
+                        "cost":  31.706930872707467,
+                        "n_samples":  191,
+                        "start_temp":  27.907793045043945,
+                        "target_temp":  0.0,
+                        "duration_s":  1196.6780533790588,
+                        "far_mae":  20.19619442155848,
+                        "time_to_reach_mid_band":  383.69121503829956
+                    },
+                    {
+                        "run_id":  "run_1777337751_eb90b8ed",
+                        "band":  "mid",
+                        "kp":  10.0,
+                        "ki":  694.0,
+                        "kd":  8.0,
+                        "cost":  6.115918393288084,
+                        "n_samples":  15,
+                        "start_temp":  27.907793045043945,
+                        "target_temp":  0.0,
+                        "duration_s":  1196.6780533790588,
+                        "mid_mae":  6.0212721824646,
+                        "approach_speed":  0.06309747388232285
+                    },
+                    {
+                        "run_id":  "run_1777337751_eb90b8ed",
+                        "band":  "near",
+                        "kp":  19.0,
+                        "ki":  140.0,
+                        "kd":  82.0,
+                        "cost":  3.4742167897676377,
+                        "n_samples":  391,
+                        "start_temp":  27.907793045043945,
+                        "target_temp":  0.0,
+                        "duration_s":  1196.6780533790588,
+                        "tail_mae":  0.2428959846496582,
+                        "jitter_std":  0.24297566566084935,
+                        "overshoot":  0.10446194951815263
+                    }
+                ]
+}

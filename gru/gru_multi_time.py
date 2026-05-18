@@ -35,7 +35,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 AUTOMATED_DIR = ROOT / "optimization"
-DEFAULT_HISTORY_ROOT = AUTOMATED_DIR / "history"
+DEFAULT_HISTORY_ROOT = AUTOMATED_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_simple"
 DEFAULT_PLOTS_DIR = Path(__file__).resolve().parent / "plots_simple"
 

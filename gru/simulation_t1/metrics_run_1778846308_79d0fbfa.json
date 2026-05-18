@@ -1,6 +1,6 @@
 {
   "checkpoint": "G:\\Other computers\\My Laptop (1)\\deepvac\\scripts\\gru\\validation_t1\\gru_t1.pt",
-  "run_csv": "G:\\Other computers\\My Laptop (1)\\deepvac\\scripts\\optimization\\history\\run_1778846308_79d0fbfa\\run_samples.csv",
+  "run_csv": "G:\\Other computers\\My Laptop (1)\\deepvac\\scripts\\optimization\\run_history\\run_1778846308_79d0fbfa\\run_samples.csv",
   "feature_names": [
     "temp",
     "temp_ref",
