@@ -1,0 +1,46 @@
+PROGRAM MainLoop
+VAR
+	chamber_Control	:Chamber_Control;
+	msTick1	:MsTick;
+	
+	xSave	:BOOL;
+	xLoad	:BOOL;
+	xResult :bool;
+END_VAR
+
+
+// рассчитываем время в мсек прошедшее с прошлого цикла
+msTick1();
+
+IF (globCom.xSettingsOK) THEN
+	
+	// real-time управление оборудованием
+	chamber_Control();
+	
+	// управление работой оборудования по интервалам и в общем
+	globCom.jobHandler();
+	
+	// обработка аварий
+	globCom.alarmHandler(xEnable := true);
+
+END_IF
+
+// планировщик системных задач
+globCom.scheduler.run(msTick1.msec);
+
+globCom.states.get('status_condition')^.value := globCom.status.getStatus();
+globCom.states.get('work_type')^.value 				:= TO_REAL(globCom.jobHandler.data.work_type);
+globCom.states.get('interval')^.value					:= setNANif(TO_REAL(globCom.jobHandler.data.intervalIndex+1),	(WORK_TYPE.NONE = globCom.jobHandler.data.work_type) );
+globCom.states.get('intervals_count')^.value	:= setNANif(TO_REAL(globCom.jobHandler.data.intervalsNumber),	(WORK_TYPE.NONE = globCom.jobHandler.data.work_type) );
+globCom.states.get('t_total')^.value 					:= TO_REAL(globCom.jobHandler.data.timer.elapsed());
+globCom.states.get('t_interval')^.value 			:= TO_REAL(globCom.jobHandler.data.timerInterval.elapsed());
+
+// DEBUG
+IF(xSave) THEN
+	xSave := FALSE;
+	saveSettings(ADR(globCom.settings));
+END_IF
+IF(xLoad) THEN
+	xLoad := FALSE;
+	xResult := loadSettings(ADR(globCom.settings));
+END_IF

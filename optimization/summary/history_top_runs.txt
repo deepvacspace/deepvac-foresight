@@ -1,0 +1,97 @@
+Metrics computed from 99 run_samples.csv. Tail MAE window: last 300 seconds.
+
+Tail MAE Rankings
+-----------------
+Best
+1. val_1777579663_b384ac56 | tail_mae=0.036715 | cost=27.101768 | time_to_cero=545.777989 | overshoot=1.360354
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=16, near_ki=105, near_kd=56
+2. run_1777167065_350a6b5e | tail_mae=0.036732 | cost=29.759504 | time_to_cero=511.100234 | overshoot=1.404400
+   coeffs: far_kp=6, far_ki=373, far_kd=0; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=16, near_ki=105, near_kd=56
+3. run_1777168750_057d19f8 | tail_mae=0.037416 | cost=37.443335 | time_to_cero=516.297219 | overshoot=1.668722
+   coeffs: far_kp=7, far_ki=355, far_kd=15; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=16, near_ki=105, near_kd=56
+
+Worst
+1. run_1777367031_3c468042 | tail_mae=1.259324 | cost=72.943646 | time_to_cero=536.776881 | overshoot=2.417514
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=11, mid_ki=345, mid_kd=41; near_kp=21, near_ki=263, near_kd=85
+2. run_1777368719_17f1ca72 | tail_mae=1.193866 | cost=71.215116 | time_to_cero=535.058964 | overshoot=2.373483
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=11, mid_ki=345, mid_kd=41; near_kp=21, near_ki=263, near_kd=85
+3. run_1777365346_4de8a777 | tail_mae=1.177846 | cost=58.925704 | time_to_cero=532.318783 | overshoot=2.109195
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=21, mid_ki=263, mid_kd=85; near_kp=21, near_ki=263, near_kd=85
+
+Middle
+median closest (0.065727). run_1778911869_11231679 | tail_mae=0.065727 | cost=22.952484 | time_to_cero=390.411597 | overshoot=1.051910
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=12, near_ki=58, near_kd=99
+average closest (0.219204). run_1776748719_5a30e401 | tail_mae=0.225402 | cost=52.684974 | time_to_cero=530.041262 | overshoot=1.977073
+   coeffs: far_kp=4, far_ki=750, far_kd=1; mid_kp=8, mid_ki=383, mid_kd=48; near_kp=15, near_ki=173, near_kd=31
+
+Time To Cero Rankings
+---------------------
+Best
+1. run_1778911869_11231679 | time_to_cero=390.411597 | cost=22.952484 | tail_mae=0.065727 | overshoot=1.051910
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=12, near_ki=58, near_kd=99
+2. run_1777424838_3cb5c6c9 | time_to_cero=476.076082 | cost=38.255055 | tail_mae=0.049386 | overshoot=1.668722
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=13, mid_ki=394, mid_kd=59; near_kp=17, near_ki=118, near_kd=60
+3. run_1777602064_7154439e | time_to_cero=480.064366 | cost=24.318635 | tail_mae=0.650383 | overshoot=0.963791
+   coeffs: far_kp=6, far_ki=997, far_kd=16; mid_kp=6, mid_ki=997, mid_kd=16; near_kp=6, near_ki=997, near_kd=16
+
+Worst
+1. run_1776865410_5268c0e4 | time_to_cero=592.347870 | cost=32.791256 | tail_mae=0.927929 | overshoot=1.404400
+   coeffs: far_kp=4, far_ki=555, far_kd=14; mid_kp=11, mid_ki=592, mid_kd=43; near_kp=14, near_ki=294, near_kd=74
+2. run_1776728758_2240b3b7 | time_to_cero=589.395919 | cost=48.839664 | tail_mae=0.932448 | overshoot=1.888981
+   coeffs: far_kp=6, far_ki=800, far_kd=20; mid_kp=10, mid_ki=500, mid_kd=50; near_kp=19, near_ki=220, near_kd=80
+3. run_1776725025_94f802a9 | time_to_cero=586.823691 | cost=33.813706 | tail_mae=0.557399 | overshoot=1.448459
+   coeffs: far_kp=4, far_ki=800, far_kd=15; mid_kp=8, mid_ki=500, mid_kd=40; near_kp=14, near_ki=200, near_kd=70
+
+Middle
+median closest (543.276900). run_1777155613_a3d5081a | time_to_cero=543.276900 | cost=30.668161 | tail_mae=0.047582 | overshoot=1.448459
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=16, near_ki=105, near_kd=56
+average closest (540.501859). run_1776803282_ad50a4ac | time_to_cero=541.088193 | cost=33.338844 | tail_mae=0.455724 | overshoot=1.404400
+   coeffs: far_kp=6, far_ki=997, far_kd=16; mid_kp=8, mid_ki=700, mid_kd=24; near_kp=12, near_ki=250, near_kd=40
+
+Cost Rankings
+-------------
+Best
+1. run_1777942732_01cc2724 | cost=19.625914 | tail_mae=0.040360 | time_to_cero=558.191562 | overshoot=1.051910
+   coeffs: far_kp=4, far_ki=641, far_kd=14; mid_kp=15, mid_ki=416, mid_kd=59; near_kp=12, near_ki=93, near_kd=74
+2. run_1777428209_ac003420 | cost=19.660064 | tail_mae=0.075114 | time_to_cero=558.282196 | overshoot=1.051910
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=12, mid_ki=525, mid_kd=49; near_kp=12, near_ki=98, near_kd=98
+3. run_1777423155_f6085e3f | cost=19.682806 | tail_mae=0.085320 | time_to_cero=558.141859 | overshoot=1.007858
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=12, mid_ki=525, mid_kd=49; near_kp=12, near_ki=58, near_kd=99
+
+Worst
+1. run_1777951165_52b81499 | cost=106.927110 | tail_mae=0.058968 | time_to_cero=509.672211 | overshoot=3.122092
+   coeffs: far_kp=9, far_ki=994, far_kd=16; mid_kp=9, mid_ki=261, mid_kd=44; near_kp=21, near_ki=127, near_kd=42
+2. run_1776743431_db463ffe | cost=106.636574 | tail_mae=1.089720 | time_to_cero=524.934539 | overshoot=3.034022
+   coeffs: far_kp=5, far_ki=858, far_kd=23; mid_kp=10, mid_ki=242, mid_kd=49; near_kp=21, near_ki=280, near_kd=50
+3. run_1777941047_2e5b7769 | cost=100.150144 | tail_mae=0.283381 | time_to_cero=545.487259 | overshoot=2.945964
+   coeffs: far_kp=4, far_ki=641, far_kd=14; mid_kp=15, mid_ki=416, mid_kd=59; near_kp=27, near_ki=151, near_kd=10
+
+Middle
+median closest (31.752192). run_1776886175_f799f1ad | cost=31.752192 | tail_mae=0.496878 | time_to_cero=562.365210 | overshoot=1.360354
+   coeffs: far_kp=7, far_ki=768, far_kd=25; mid_kp=14, mid_ki=498, mid_kd=16; near_kp=12, near_ki=250, near_kd=50
+average closest (37.896670). run_1777434949_a2c64bf7 | cost=38.116741 | tail_mae=0.090663 | time_to_cero=542.195545 | overshoot=1.668722
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=13, mid_ki=699, mid_kd=58; near_kp=18, near_ki=124, near_kd=49
+
+Overshoot Rankings
+------------------
+Best
+1. run_1777602064_7154439e | overshoot=0.963791 | cost=24.318635 | tail_mae=0.650383 | time_to_cero=480.064366
+   coeffs: far_kp=6, far_ki=997, far_kd=16; mid_kp=6, mid_ki=997, mid_kd=16; near_kp=6, near_ki=997, near_kd=16
+2. run_1777600200_2804c97f | overshoot=0.963791 | cost=23.024097 | tail_mae=0.695324 | time_to_cero=547.800554
+   coeffs: far_kp=6, far_ki=997, far_kd=16; mid_kp=6, mid_ki=997, mid_kd=16; near_kp=6, near_ki=997, near_kd=16
+3. run_1777610224_40349378 | overshoot=1.007858 | cost=24.387153 | tail_mae=0.690009 | time_to_cero=522.881566
+   coeffs: far_kp=6, far_ki=997, far_kd=16; mid_kp=6, mid_ki=997, mid_kd=16; near_kp=6, near_ki=997, near_kd=16
+
+Worst
+1. run_1777951165_52b81499 | overshoot=3.122092 | cost=106.927110 | tail_mae=0.058968 | time_to_cero=509.672211
+   coeffs: far_kp=9, far_ki=994, far_kd=16; mid_kp=9, mid_ki=261, mid_kd=44; near_kp=21, near_ki=127, near_kd=42
+2. run_1776743431_db463ffe | overshoot=3.034022 | cost=106.636574 | tail_mae=1.089720 | time_to_cero=524.934539
+   coeffs: far_kp=5, far_ki=858, far_kd=23; mid_kp=10, mid_ki=242, mid_kd=49; near_kp=21, near_ki=280, near_kd=50
+3. run_1777941047_2e5b7769 | overshoot=2.945964 | cost=100.150144 | tail_mae=0.283381 | time_to_cero=545.487259
+   coeffs: far_kp=4, far_ki=641, far_kd=14; mid_kp=15, mid_ki=416, mid_kd=59; near_kp=27, near_ki=151, near_kd=10
+
+Middle
+median closest (1.448459). run_1777148879_62f24233 | overshoot=1.448459 | cost=30.671340 | tail_mae=0.051924 | time_to_cero=531.590008
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=10, mid_ki=694, mid_kd=8; near_kp=16, near_ki=105, near_kd=56
+average closest (1.593046). run_1778842665_478b14a2 | overshoot=1.580607 | cost=34.314174 | tail_mae=0.051187 | time_to_cero=544.044373
+   coeffs: far_kp=7, far_ki=966, far_kd=1; mid_kp=11, mid_ki=650, mid_kd=16; near_kp=16, near_ki=105, near_kd=56

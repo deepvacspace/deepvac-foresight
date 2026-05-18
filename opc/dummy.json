@@ -1,0 +1,32 @@
+[
+  {
+    "timestamp": 1768600403.1946762,
+    "temp": 25.320987701416016,
+    "temp_raw": 23.320987701416016,
+    "state": 1,
+    "con": NaN,
+    "con_p": NaN,
+    "con_i": NaN,
+    "con_d": NaN
+  },
+  {
+    "timestamp": 1768600405.153961,
+    "temp": 25.320987701416016,
+    "temp_raw": 23.320987701416016,
+    "state": 1,
+    "con": NaN,
+    "con_p": NaN,
+    "con_i": NaN,
+    "con_d": NaN
+  },
+  {
+    "timestamp": 1768600407.1286101,
+    "temp": 25.320987701416016,
+    "temp_raw": 23.320987701416016,
+    "state": 1,
+    "con": NaN,
+    "con_p": NaN,
+    "con_i": NaN,
+    "con_d": NaN
+  }
+]

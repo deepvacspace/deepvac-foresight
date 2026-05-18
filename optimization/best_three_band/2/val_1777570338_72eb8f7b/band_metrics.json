@@ -1,0 +1,54 @@
+﻿{
+    "run_id":  "val_1777570338_72eb8f7b",
+    "records":  [
+                    {
+                        "run_id":  "val_1777570338_72eb8f7b",
+                        "band":  "far",
+                        "kp":  7.0,
+                        "ki":  355.0,
+                        "kd":  15.0,
+                        "cost":  31.95544236869523,
+                        "valid":  true,
+                        "n_samples":  198,
+                        "start_temp":  27.151344299316406,
+                        "target_temp":  0.0,
+                        "initial_error":  27.151344299316406,
+                        "duration_s":  1197.9018948078156,
+                        "far_mae":  20.078167886445016,
+                        "time_to_reach_mid_band":  395.90914940834045
+                    },
+                    {
+                        "run_id":  "val_1777570338_72eb8f7b",
+                        "band":  "mid",
+                        "kp":  10.0,
+                        "ki":  694.0,
+                        "kd":  8.0,
+                        "cost":  4.393657831855322,
+                        "valid":  true,
+                        "n_samples":  43,
+                        "start_temp":  27.151344299316406,
+                        "target_temp":  0.0,
+                        "initial_error":  27.151344299316406,
+                        "duration_s":  1197.9018948078156,
+                        "mid_mae":  4.317622495252032,
+                        "approach_speed":  0.05069022440219269
+                    },
+                    {
+                        "run_id":  "val_1777570338_72eb8f7b",
+                        "band":  "near",
+                        "kp":  16.0,
+                        "ki":  105.0,
+                        "kd":  56.0,
+                        "cost":  0.4725402084284365,
+                        "valid":  true,
+                        "n_samples":  358,
+                        "start_temp":  27.151344299316406,
+                        "target_temp":  0.0,
+                        "initial_error":  27.151344299316406,
+                        "duration_s":  1197.9018948078156,
+                        "tail_mae":  0.04128113945761875,
+                        "jitter_std":  0.047780926369386245,
+                        "overshoot":  0.0007730518558109093
+                    }
+                ]
+}

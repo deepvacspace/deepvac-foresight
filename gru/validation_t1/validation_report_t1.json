@@ -1,0 +1,35 @@
+{
+  "best_epoch": 95,
+  "best_val_loss": 0.12196982635983399,
+  "best_model_path": "G:\\Other computers\\My Laptop (1)\\deepvac\\scripts\\gru\\validation_t1\\gru_t1.pt",
+  "target": "temp(t+1 row) - temp(t)",
+  "final_metrics": {
+    "mae_delta_t1": 0.02542043663561344,
+    "rmse_delta_t1": 0.07905644923448563,
+    "bias_delta_t1": 0.004599632229655981
+  },
+  "test_metrics": {
+    "mae_delta_t1": 0.02614586055278778,
+    "rmse_delta_t1": 0.04623089358210564,
+    "bias_delta_t1": 0.002503175288438797
+  },
+  "num_train_runs": 79,
+  "num_val_runs": 10,
+  "num_test_runs": 10,
+  "num_train_sequences": 40858,
+  "num_val_sequences": 4423,
+  "num_test_sequences": 4556,
+  "feature_names": [
+    "temp",
+    "temp_ref",
+    "error",
+    "temp_u",
+    "temp_u_p",
+    "temp_u_i",
+    "temp_u_d",
+    "kp",
+    "ki",
+    "kd"
+  ],
+  "error_sign": "error = temp_ref - temp"
+}

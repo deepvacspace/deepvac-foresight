@@ -1,0 +1,257 @@
+FUNCTION_BLOCK Chamber_Control
+VAR
+	jobHdl 		:REFERENCE TO jobHandler;
+	interval	:REFERENCE TO JOB_INTERVAL;
+	
+	jobEnable	:BOOL;
+	
+	// values from state and setting maps
+	s_temp	:REAL;
+
+	xTempActive :BOOL;
+	xRefStop		:BOOL;
+	
+	deltaTemp		:REAL;
+	refTemp			:REAL;	// temperature reference vaule at current interval progress
+	//refPres			:REAL;	// pressure reference vaule (torr)
+	//refPresVolt	:REAL;	// pressure reference vaule (volt)
+	
+	// control signals
+	u_tempMinus	:REAL;
+	u_tempPlus	:REAL;
+	
+	// combin
+	pres_unify			:REAL;
+	pres_unify_ref	:REAL;
+	pres_pid_coefs_index :INT := 2;
+	
+	temp_pid_coefs_index : INT := 3;
+	tempPidCoefs : PidValues;
+	
+	inletBits 	:BYTE; (* deep vac inlets' valves bits *)
+	
+	// REF
+	ref	:RefCool;
+	coolSignalGenerator :Cont2Desc;
+	coolSignal			:BOOL;
+	//
+	refCondition	:BOOL; // cool
+	
+	tempTeh	:Cont2Desc;
+	
+	compressorTempCheck404			:CompressorTempCheck;
+	compressorTempCheck23				:CompressorTempCheck;
+	compressorLowPresContrl404	:CompressorTempCheck; // same CompressorTempCheck controller but for PRESSURE!
+	
+	dummy:BOOL;
+	
+	refWorkTemp : REAL := 70.0;
+END_VAR
+
+
+jobHdl 		REF= globCom.jobHandler;	// reference to job handler 
+interval	REF= jobHdl.interval;		  // reference to current interval
+jobEnable := globCom.status.getJobStatus();
+
+ReadInput();
+s_temp := globCom.states.get('temp')^.value;
+globCom.pres_torr_ref := 0.0;
+globCom.pres_volt_ref := 0.0;
+
+xTempActive			:= FALSE;
+globCom.xPresActive := FALSE;
+xRefStop 			:= TRUE;
+
+IF (jobEnable) THEN
+	// temp control
+	IF(Util.EXTRACT(interval.flags, globCom.TEMP_BIT)) THEN
+		xTempActive	:= TRUE;
+		xRefStop	:= FALSE;
+		
+		IF(EXTRACT(interval.flags, globCom.RAMP_BIT)) THEN
+			deltaTemp := interval.temp2 - interval.temp;
+			refTemp := interval.temp + deltaTemp * jobHdl.getIntervalProgress();
+		ELSE
+			deltaTemp := 0;
+			refTemp := interval.temp;
+		END_IF
+	END_IF
+	
+	// pres control
+	IF(Util.EXTRACT(interval.flags, globCom.PRES_BIT)) THEN
+		globCom.xPresActive		:= TRUE;
+		globCom.pres_torr_ref	:= interval.pres;
+		globCom.pres_volt_ref	:= 8.0 + (LOG(globCom.pres_torr_ref / 0.750062) / 1.5); // torr -> mbar -> volt
+	END_IF
+END_IF
+
+// === PIDS ===
+// Temp
+IF(s_temp>-40) THEN
+	globCom.pidTemp.u_min:= -0.99;
+ELSE
+	globCom.pidTemp.u_min := -1;
+END_IF
+IF(refTemp>=refWorkTemp) THEN
+	globCom.pidTemp.u_min := 0;
+END_IF
+
+globCom.pidTemp.pidCoefs := globCom.tempPidSelector.getCoefsIndex(temp_pid_coefs_index);
+globCom.pidTemp.pidCoefs := tempPidCoefs;
+
+globCom.pidTemp(
+	enable 		:= xTempActive,
+	x_measured	:= s_temp,
+	x_target	:= refTemp
+);
+SeparateSignal(globCom.pidTemp.u, ADR(u_tempMinus), ADR(u_tempPlus), 0.0);
+
+// Pres
+// select torr or volts and pid range
+IF (globCom.pres_torr_ref >= 20) THEN
+	pres_unify 				:= globCom.pres_torr;
+	pres_unify_ref			:= globCom.pres_torr_ref;
+	pres_pid_coefs_index	:= 1;
+ELSE
+	pres_unify				:= globCom.pres_volt;
+	pres_unify_ref			:= globCom.pres_volt_ref;
+	pres_pid_coefs_index	:= 0;
+END_IF
+
+globCom.pidPres.pidCoefs := globCom.presPidSelector.getCoefsIndex(pres_pid_coefs_index); 
+// limit for forvac or termo-molec
+//IF (0 = globCom.vacuumController.mode_low_pres) THEN
+//	globCom.pidPres.u_min :=-1; // in 20-760 range
+//ELSE
+//	globCom.pidPres.u_min := 0;
+//END_IF
+globCom.pidPres(
+	enable 		:= globCom.xPresActive,
+	x_measured	:= pres_unify,
+	x_target	:= pres_unify_ref
+);
+
+
+// ===
+
+// === TEMPERATURE CONTROL ===
+coolSignalGenerator (
+	enable := u_tempMinus<0,
+	u_cont := -u_tempMinus,
+);
+coolSignal := coolSignalGenerator.u_desc;
+
+refCondition := (refTemp <= globCom.settings.get('temp_comp_alw')^.value); 
+
+ref(
+	in 				:= coolSignal AND (refTemp<refWorkTemp),
+	ContWorkCondition	:= refCondition,
+	time_on			:= TO_TIME(1000*globCom.settings.get('t_gis_404')^.value),
+	time_off 		:= T#2M,
+	timeSecDelay	:= TO_TIME(1000*globCom.settings.get('t_delay_23')^.value),
+	stop			:= xRefStop
+);
+
+IO_SIGNALS.PUMP 			:= xTempActive;
+IO_SIGNALS.COMP404 			:= ref.comp404;
+IO_SIGNALS.COMP23  			:= ref.comp23;
+IO_SIGNALS.COMP23_MAIN		:= coolSignal AND IO_SIGNALS.COMP23;
+IO_SIGNALS.COMP404_COOL		:= FALSE;
+IO_SIGNALS.COMP23_COOL		:= FALSE;
+
+compressorTempCheck404(
+	coolSignal	:= IO_SIGNALS.COMP404_COOL,
+	enable		:= IO_SIGNALS.COMP404,
+	tempComp	:= globCom.states.get('temp_404_high')^.value,
+	temp1		:= globCom.settings.get('temp404cool1')^.value,
+	temp2		:= globCom.settings.get('temp404cool2')^.value
+);
+
+compressorTempCheck23(
+	coolSignal	:= IO_SIGNALS.COMP23_COOL,
+	enable		:= IO_SIGNALS.COMP23,
+	tempComp	:= globCom.states.get('temp_23_high')^.value,
+	temp1		:= globCom.settings.get('temp23cool1')^.value,
+	temp2		:= globCom.settings.get('temp23cool2')^.value
+);
+
+// USED HERE NOT FOR TEMP !!!
+// '-' used to success work with inverted inteval
+compressorLowPresContrl404(
+	coolSignal	:= dummy, //IO_SIGNALS.COMP404_BYPASS,
+	enable		:= IO_SIGNALS.COMP404,
+	tempComp	:= -globCom.states.get('pres_404_low')^.value,
+	temp1		:= -0.3,
+	temp2		:= -0.05
+);
+
+IF(u_tempPlus>0) THEN
+	tempTeh(
+		u_cont := u_tempPlus * globCom.settings.get('teh_duty')^.value,
+		enable := xTempActive,
+		impulse_middle	:= T#300MS,
+		use_only_middle	:= TRUE
+	);
+ELSE
+	tempTeh(u_cont:=0, enable:=FALSE);
+END_IF
+
+IO_SIGNALS.TEMP_TEH_OUT := tempTeh.u_desc;
+// ===
+
+// === VACUUM CONTROL === 
+globCom.vacuumController(
+	enable	 := globCom.xPresActive,
+	set_pres := globCom.pres_torr_ref,
+	cur_pres := globCom.pres_torr,
+	u_pres	 := globCom.pidPres.u
+);
+
+inletBits := InletSelector(
+	enable := globCom.xPresActive,
+	pres := globCom.pres_torr,
+	p1 := globCom.settings.get('pres_in_1')^.value,
+	p2 := globCom.settings.get('pres_in_2')^.value,
+	p3 := globCom.settings.get('pres_in_3')^.value,
+	p4 := globCom.settings.get('pres_in_4')^.value
+);
+
+IO_SIGNALS.VAC 						:= globCom.vacuumController.vac;
+IO_SIGNALS.VAC_TMH					:= globCom.vacuumController.vac_tmh;
+IO_SIGNALS.VAC_MAIN_INLET_PV2 		:= globCom.vacuumController.valve_vol;
+IO_SIGNALS.VAC_VALVE_TMC_PV3		:= globCom.vacuumController.valve_tmc;
+IO_SIGNALS.VAC_GATE_PV1				:= globCom.vacuumController.valve_gate;
+IO_SIGNALS.VAC_VALVE_OUTLET_PV4		:= globCom.vacuumController.valve_pv4;
+IO_SIGNALS.VAC_VALVE_OUTLET_PV5		:= globCom.vacuumController.valve_pv5;
+IO_SIGNALS.VAC_VALVE_WATER			:= globCom.vacuumController.valve_water;
+
+IF(globCom.xPresActive) THEN
+	IO_SIGNALS.VAC_VALVE_OUTLET_PV6	:= FALSE;
+END_IF
+
+globCom.xTM_full_stop := (NOT globCom.xPresActive) AND (0 = globCom.vacuumController.stage);
+                                                             
+IO_SIGNALS.VAC_VALVE_CONST_INLET1 := inletBits.0;
+IO_SIGNALS.VAC_VALVE_CONST_INLET2 := inletBits.1;
+IO_SIGNALS.VAC_VALVE_CONST_INLET3 := inletBits.2;
+IO_SIGNALS.VAC_VALVE_CONST_INLET4 := inletBits.3;
+// ===
+
+globCom.states.get('temp_ref')^.value := setNANif(    refTemp, 			  		NOT(jobEnable AND xTempActive) );
+globCom.states.get('temp_u')^.value   := setNANif(100*globCom.pidTemp.u,		NOT(jobEnable AND xTempActive) );
+globCom.states.get('temp_u_p')^.value := setNANif(100*globCom.pidTemp.values.p,	NOT(jobEnable AND xTempActive) );
+globCom.states.get('temp_u_i')^.value := setNANif(100*globCom.pidTemp.values.i,	NOT(jobEnable AND xTempActive) );
+globCom.states.get('temp_u_d')^.value := setNANif(100*globCom.pidTemp.values.d,	NOT(jobEnable AND xTempActive) );
+
+globCom.states.get('temp_kp')^.value      := setNANif(tempPidCoefs.p, NOT(jobEnable AND xTempActive));
+globCom.states.get('temp_ki')^.value      := setNANif(tempPidCoefs.i, NOT(jobEnable AND xTempActive));
+globCom.states.get('temp_kd')^.value      := setNANif(tempPidCoefs.d, NOT(jobEnable AND xTempActive));
+globCom.states.get('temp_pid_idx')^.value := setNANif(TO_REAL(temp_pid_coefs_index), NOT(jobEnable AND xTempActive));
+
+globCom.states.get('pres_ref')^.value := setNANif(    globCom.pres_torr_ref,	NOT(jobEnable AND globCom.xPresActive) );
+globCom.states.get('pres_u')^.value   := setNANif(100*globCom.pidPres.u,		NOT(jobEnable AND globCom.xPresActive) );
+globCom.states.get('pres_u_p')^.value := setNANif(100*globCom.pidPres.values.p,	NOT(jobEnable AND globCom.xPresActive) );
+globCom.states.get('pres_u_i')^.value := setNANif(100*globCom.pidPres.values.i,	NOT(jobEnable AND globCom.xPresActive) );
+globCom.states.get('pres_u_d')^.value := setNANif(100*globCom.pidPres.values.d,	NOT(jobEnable AND globCom.xPresActive) );
+
+WriteOutput();

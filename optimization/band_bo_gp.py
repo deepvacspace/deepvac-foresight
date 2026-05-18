@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+"""
+Compute band-specific metrics and costs for each run using three Gaussian Process models
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import pickle
+import time
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
+from sklearn.preprocessing import StandardScaler
+
+
+BANDS = ("far", "mid", "near")
+COEF_COLS = ("kp", "ki", "kd")
+REQUIRED_COLS = ("timestamp", "kp", "ki", "kd", "temp", "temp_ref")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description="Train separate GP BO models for far/mid/near PID coefficient triplets."
+    )
+
+    ap.add_argument("--history-root", default="history",
+                    help="Root folder for runs.")
+    ap.add_argument(
+        "--telemetry-names",
+        nargs="+",
+        default=["run_samples.csv"],
+        help="Telemetry file names.",
+    )
+
+    ap.add_argument(
+        "--acquisition",
+        choices=["ei", "lcb"],
+        default="lcb",
+        help="Acquisition function: ei = Expected Improvement, lcb = Lower Confidence Bound.",
+    )
+
+    ap.add_argument(
+        "--lcb-kappa",
+        type=float,
+        default=0.5,
+        help="LCB exploration parameter. Higher = more exploration, lower = more exploitation.",
+    )
+
+    ap.add_argument("--far-threshold", type=float, default=7.0)
+    ap.add_argument("--near-threshold", type=float, default=2.0)
+
+    ap.add_argument("--min-band-samples", type=int, default=8)
+
+    ap.add_argument("--far-time-weight", type=float, default=0.03)
+
+    ap.add_argument("--mid-mae-weight", type=float, default=1.0)
+    ap.add_argument("--mid-overshoot-weight", type=float, default=8.0)
+    ap.add_argument("--mid-slope-weight", type=float, default=1.5)
+
+    ap.add_argument("--near-tail-mae-weight", type=float, default=2.0)
+    ap.add_argument("--near-jitter-weight", type=float, default=8.0)
+    ap.add_argument("--near-bias-weight", type=float, default=4.0)
+    ap.add_argument("--near-overshoot-weight", type=float, default=10.0)
+
+    ap.add_argument("--tail-seconds", type=float, default=300.0)
+
+    ap.add_argument("--far-kp-bounds", default="5,10")
+    ap.add_argument("--far-ki-bounds", default="850,1000")
+    ap.add_argument("--far-kd-bounds", default="0,20")
+
+    ap.add_argument("--mid-kp-bounds", default="14,24")
+    ap.add_argument("--mid-ki-bounds", default="180,750")
+    ap.add_argument("--mid-kd-bounds", default="40,110")
+
+    ap.add_argument("--near-kp-bounds", default="14,24")
+    ap.add_argument("--near-ki-bounds", default="60,180")
+    ap.add_argument("--near-kd-bounds", default="10,80")
+
+    ap.add_argument("--n-candidates", type=int, default=20000)
+    ap.add_argument("--xi", type=float, default=0.01,
+                    help="Expected-improvement exploration parameter.")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--n-restarts-optimizer", type=int, default=5)
+
+    ap.add_argument("--per-run-metrics-csv", default="band_metrics.csv")
+    ap.add_argument("--per-run-metrics-json", default="band_metrics.json")
+    ap.add_argument("--models-out", default="history/band_gp_models.pkl")
+    ap.add_argument("--next-out", default="history/band_bo_next_params.json")
+    ap.add_argument("--suggestions-dir", default="history/band_bo_suggestions")
+
+    return ap
+
+
+# --------------------------- EXPECTED IMPROVEMENT CALCULATION ---------------------------
+
+# probability density function of standard normal distribution
+def normal_pdf(z: np.ndarray) -> np.ndarray:
+    return np.exp(-0.5 * np.square(z)) / np.sqrt(2.0 * np.pi)
+
+# cumulative density function of standard normal distribution
+
+
+def normal_cdf(z: np.ndarray) -> np.ndarray:
+    erf_vec = np.vectorize(math.erf)
+    return 0.5 * (1.0 + erf_vec(z / np.sqrt(2.0)))
+
+
+def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: float) -> np.ndarray:
+    """
+    Expected improvement for minimization.
+
+    y_best is the lowest observed cost so far.
+    mu is predicted cost.
+    sigma is prediction uncertainty.
+
+    High EI:
+      - predicted cost is lower than current best
+      - uncertainty is large enough that the candidate is worth testing
+    """
+    sigma_safe = np.maximum(sigma, 1e-12)
+    improvement = y_best - mu - xi
+    z = improvement / sigma_safe
+    ei = improvement * normal_cdf(z) + sigma_safe * normal_pdf(z)
+    ei[sigma <= 1e-12] = 0.0
+    return ei
+
+
+# --------------------------- LOWER CONFIDENCE BOUND CALCULATION ---------------------------
+
+def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> np.ndarray:
+    """
+    Lower Confidence Bound for minimization
+    """
+    return mu - kappa * sigma
+
+# -------------------------------------- UTILS ---------------------------
+
+
+def parse_bounds(text: str) -> Tuple[float, float]:
+    lo, hi = [float(x.strip()) for x in text.split(",")]
+    if not lo < hi:
+        raise ValueError(
+            f"Invalid bounds {text!r}; expected low,high with low < high.")
+    return lo, hi
+
+
+def save_json(path: Path, payload: Dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def find_csv(run_dir: Path, preferred_names: List[str]) -> Optional[Path]:
+    for name in preferred_names:
+        p = run_dir / name
+        if p.exists() and p.stat().st_size > 0:
+            return p
+
+    # Fallback: find any CSV with the required telemetry columns.
+    for p in sorted(run_dir.glob("*.csv")):
+        try:
+            head = pd.read_csv(p, nrows=3)
+        except Exception:
+            continue
+        if all(c in head.columns for c in REQUIRED_COLS):
+            return p
+
+    return None
+
+
+def iter_run_dirs(history_root: Path) -> Iterable[Path]:
+
+    if not history_root.exists():
+        raise FileNotFoundError(f"History root does not exist: {history_root}")
+
+    for child in sorted(history_root.iterdir()):
+        if child.is_dir():
+            yield child
+
+
+def safe_mean(x: pd.Series | np.ndarray) -> float:
+    arr = np.asarray(x, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.mean(arr)) if len(arr) else float("nan")
+
+
+def safe_std(x: pd.Series | np.ndarray) -> float:
+    arr = np.asarray(x, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.std(arr)) if len(arr) else float("nan")
+
+
+def band_coefficients(df_band: pd.DataFrame) -> Dict[str, float]:
+
+    return {
+        "kp": float(df_band["kp"].median()),
+        "ki": float(df_band["ki"].median()),
+        "kd": float(df_band["kd"].median()),
+    }
+
+
+def signed_error(df: pd.DataFrame) -> pd.Series:
+
+    return df["temp"] - df["temp_ref"]
+
+
+def start_error_sign(df: pd.DataFrame) -> float:
+    e0 = float(df["error"].iloc[0])
+    if abs(e0) < 1e-9:
+        return 0.0
+    return float(np.sign(e0))
+
+
+# -------------------------------------- DATA PROCESSING ---------------------------
+
+
+def load_telemetry(csv_path: Path) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+
+    missing = [c for c in REQUIRED_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(f"{csv_path} is missing required columns: {missing}")
+
+    for col in REQUIRED_COLS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=list(REQUIRED_COLS)).copy()
+    df = df.sort_values("timestamp").drop_duplicates(
+        subset=["timestamp"], keep="last")
+
+    if len(df) < 3:
+        raise ValueError(f"{csv_path} has too few usable rows after cleaning.")
+
+    return df.reset_index(drop=True)
+
+
+def classify_bands(df: pd.DataFrame, far_threshold: float, near_threshold: float) -> pd.DataFrame:
+    out = df.copy()
+    out["error"] = signed_error(out)
+    out["abs_error"] = out["error"].abs()
+
+    out["band"] = "mid"
+    out.loc[out["abs_error"] > far_threshold, "band"] = "far"
+    out.loc[out["abs_error"] <= near_threshold, "band"] = "near"
+
+    return out
+
+
+def bounds_for_band(args: argparse.Namespace, band: str) -> Dict[str, Tuple[float, float]]:
+    return {
+        "kp": parse_bounds(getattr(args, f"{band}_kp_bounds")),
+        "ki": parse_bounds(getattr(args, f"{band}_ki_bounds")),
+        "kd": parse_bounds(getattr(args, f"{band}_kd_bounds")),
+    }
+
+
+def add_time_and_slopes(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.sort_values("timestamp").copy()
+    t0 = float(out["timestamp"].iloc[0])
+    out["t_rel"] = out["timestamp"].astype(float) - t0
+
+    dt = out["timestamp"].astype(float).diff()
+    dt = dt.replace(0.0, np.nan)
+
+    out["dtemp_dt"] = out["temp"].astype(float).diff() / dt
+    out["derr_dt"] = out["error"].astype(float).diff() / dt
+    out["dabs_error_dt"] = out["abs_error"].astype(float).diff() / dt
+
+    for col in ("dtemp_dt", "derr_dt", "dabs_error_dt"):
+        out[col] = out[col].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    return out
+
+
+def overshoot_amount(df: pd.DataFrame, init_sign: float) -> pd.Series:
+
+    if init_sign > 0:
+        return (-df["error"]).clip(lower=0.0)
+    if init_sign < 0:
+        return (df["error"]).clip(lower=0.0)
+
+    return pd.Series(np.zeros(len(df)), index=df.index)
+
+# -------------------------------------- COST CALCULATION ---------------------------
+
+
+def compute_far_cost(
+    df_all: pd.DataFrame,
+    df_far: pd.DataFrame,
+    far_threshold: float,
+    min_band_samples: int,
+    time_weight: float,
+) -> Dict[str, float | int]:
+    """
+    objective:
+      - change quick
+    """
+    n = int(len(df_far))
+    enough = n >= min_band_samples
+
+    if n == 0:
+        return {
+            "n_samples": 0,
+            "cost": float("nan"),
+            "far_mae": float("nan"),
+            "time_to_reach_mid_band": float("nan"),
+        }
+
+    far_mae = safe_mean(df_far["abs_error"])
+
+    reached = df_all[df_all["abs_error"] <= far_threshold]
+    duration = float(df_all["t_rel"].iloc[-1] - df_all["t_rel"].iloc[0])
+
+    if len(reached):
+        time_to_mid = float(reached["t_rel"].iloc[0])
+    else:
+        time_to_mid = duration * 1.5
+
+    cost = far_mae + time_weight * time_to_mid
+
+    return {
+        "n_samples": n,
+        "cost": float(cost) if enough else float("nan"),
+        "far_mae": float(far_mae),
+        "time_to_reach_mid_band": float(time_to_mid),
+    }
+
+
+def compute_mid_cost(
+    df_mid: pd.DataFrame,
+    near_threshold: float,
+    min_band_samples: int,
+    mae_weight: float,
+    slope_weight: float,
+) -> Dict[str, float | int]:
+    """
+    objective:
+      - Reduce error
+      - Arrive slow
+    """
+    n = int(len(df_mid))
+    enough = n >= min_band_samples
+
+    if n == 0:
+        return {
+            "n_samples": 0,
+            "cost": float("nan"),
+            "mid_mae": float("nan"),
+            "approach_speed": float("nan"),
+        }
+
+    mid_mae = safe_mean(df_mid["abs_error"])
+
+    near_edge_limit = near_threshold + 1.0
+    near_edge = df_mid[df_mid["abs_error"] <= near_edge_limit]
+
+    if len(near_edge):
+        approach_speed = safe_mean(
+            (-near_edge["dabs_error_dt"]).clip(lower=0.0))
+    else:
+        approach_speed = 0.0
+
+    cost = (
+        mae_weight * mid_mae
+        + slope_weight * approach_speed
+    )
+
+    return {
+        "n_samples": n,
+        "cost": float(cost) if enough else float("nan"),
+        "mid_mae": float(mid_mae),
+        "approach_speed": float(approach_speed),
+    }
+
+
+def compute_near_cost(
+    df_near: pd.DataFrame,
+    min_band_samples: int,
+    tail_seconds: float,
+    init_sign: float,
+    tail_mae_weight: float,
+    jitter_weight: float,
+    overshoot_weight: float,
+) -> Dict[str, float | int]:
+    """
+    objective:
+      - Reduce MAE to zero
+      - Reduce std (jitter)
+      - Avoid overshoot
+
+    """
+    n = int(len(df_near))
+    enough = n >= min_band_samples
+
+    if n == 0:
+        return {
+            "n_samples": 0,
+            "cost": float("nan"),
+            "tail_mae": float("nan"),
+            "jitter_std": float("nan"),
+            "overshoot": float("nan"),
+        }
+
+    t_last = float(df_near["t_rel"].iloc[-1])
+    tail = df_near[df_near["t_rel"] >= (t_last - tail_seconds)]
+
+    if len(tail) < max(3, min_band_samples // 2):
+        tail = df_near.tail(max(3, min(len(df_near), min_band_samples)))
+
+    tail_mae = safe_mean(tail["abs_error"])
+    jitter_std = safe_std(tail["error"])
+
+    os_amt = overshoot_amount(tail, init_sign)
+    overshoot = safe_mean(np.square(os_amt))
+
+    cost = (
+        tail_mae_weight * tail_mae
+        + jitter_weight * jitter_std
+        + overshoot_weight * overshoot
+    )
+
+    return {
+        "n_samples": n,
+        "cost": float(cost) if enough else float("nan"),
+        "tail_mae": float(tail_mae),
+        "jitter_std": float(jitter_std),
+        "overshoot": float(overshoot),
+    }
+
+
+def compute_run_band_metrics(
+    run_dir: Path,
+    telemetry_csv: Path,
+    args: argparse.Namespace,
+) -> List[Dict[str, object]]:
+    df = load_telemetry(telemetry_csv)
+    df = classify_bands(df, far_threshold=args.far_threshold,
+                        near_threshold=args.near_threshold)
+    df = add_time_and_slopes(df)
+
+    run_id = str(df["run_id"].iloc[0]) if "run_id" in df.columns and pd.notna(
+        df["run_id"].iloc[0]) else run_dir.name
+    init_sign = start_error_sign(df)
+
+    df_far = df[df["band"] == "far"].copy()
+    df_mid = df[df["band"] == "mid"].copy()
+    df_near = df[df["band"] == "near"].copy()
+
+    far_metrics = compute_far_cost(
+        df_all=df,
+        df_far=df_far,
+        far_threshold=args.far_threshold,
+        min_band_samples=args.min_band_samples,
+        time_weight=args.far_time_weight,
+    )
+
+    mid_metrics = compute_mid_cost(
+        df_mid=df_mid,
+        near_threshold=args.near_threshold,
+        min_band_samples=args.min_band_samples,
+        mae_weight=args.mid_mae_weight,
+        slope_weight=args.mid_slope_weight,
+    )
+
+    near_metrics = compute_near_cost(
+        df_near=df_near,
+        min_band_samples=args.min_band_samples,
+        tail_seconds=args.tail_seconds,
+        init_sign=init_sign,
+        tail_mae_weight=args.near_tail_mae_weight,
+        jitter_weight=args.near_jitter_weight,
+        overshoot_weight=args.near_overshoot_weight,
+    )
+
+    band_to_df = {"far": df_far, "mid": df_mid, "near": df_near}
+    band_to_metrics = {"far": far_metrics,
+                       "mid": mid_metrics, "near": near_metrics}
+
+    records: List[Dict[str, object]] = []
+
+    for band in BANDS:
+        df_band = band_to_df[band]
+        metrics = band_to_metrics[band]
+
+        if len(df_band):
+            coefs = band_coefficients(df_band)
+        else:
+            coefs = {"kp": float("nan"), "ki": float(
+                "nan"), "kd": float("nan")}
+
+        rec: Dict[str, object] = {
+            "run_id": run_id,
+            "band": band,
+            "kp": coefs["kp"],
+            "ki": coefs["ki"],
+            "kd": coefs["kd"],
+            "cost": metrics["cost"],
+            "n_samples": metrics["n_samples"],
+            "start_temp": float(df["temp"].iloc[0]),
+            "target_temp": float(df["temp_ref"].iloc[-1]),
+            "duration_s": float(df["t_rel"].iloc[-1] - df["t_rel"].iloc[0]),
+        }
+
+        for k, v in metrics.items():
+            if k not in rec:
+                rec[k] = v
+
+        records.append(rec)
+
+    # Save inside the run folder.
+    metrics_csv = run_dir / args.per_run_metrics_csv
+    metrics_json = run_dir / args.per_run_metrics_json
+
+    pd.DataFrame(records).to_csv(metrics_csv, index=False)
+    save_json(metrics_json, {"run_id": run_id, "records": records})
+
+    return records
+
+
+def compute_all_run_metrics(args: argparse.Namespace) -> pd.DataFrame:
+    history_root = Path(args.history_root)
+    all_records: List[Dict[str, object]] = []
+
+    for run_dir in iter_run_dirs(history_root):
+        telemetry_csv = find_csv(run_dir, args.telemetry_names)
+        if telemetry_csv is None:
+            continue
+
+        try:
+            records = compute_run_band_metrics(run_dir, telemetry_csv, args)
+            all_records.extend(records)
+            # print(f"[OK] metrics: {run_dir} - {telemetry_csv.name}")
+        except Exception as exc:
+            print(f"[WARN] skipped {run_dir}: {exc}")
+
+    if not all_records:
+        raise RuntimeError(
+            f"No usable run telemetry found under {history_root}")
+
+    table = pd.DataFrame(all_records)
+    for col in ("kp", "ki", "kd", "cost", "n_samples"):
+        table[col] = pd.to_numeric(table[col], errors="coerce")
+
+    return table
+
+# -------------------------------------- FIT MODELS AND SUGGEST ---------------------------
+
+
+def fit_one_band_gp(
+    training_table: pd.DataFrame,
+    band: str,
+    n_restarts_optimizer: int,
+) -> Optional[Dict[str, object]]:
+    df = training_table[
+        (training_table["band"] == band)
+        & np.isfinite(pd.to_numeric(training_table["cost"], errors="coerce"))
+    ].copy()
+
+    df = df.dropna(subset=["kp", "ki", "kd", "cost"])
+
+    X = df[["kp", "ki", "kd"]].to_numpy(dtype=float)
+    y = df["cost"].to_numpy(dtype=float)
+
+    scaler = StandardScaler()
+    Xs = scaler.fit_transform(X)
+
+    kernel = (
+        ConstantKernel(1.0, (1e-3, 1e3))
+        * Matern(length_scale=[1.0, 1.0, 1.0], length_scale_bounds=(1e-2, 1e2), nu=2.5)
+        + WhiteKernel(noise_level=1e-4, noise_level_bounds=(1e-8, 1.0))
+    )
+
+    gp = GaussianProcessRegressor(
+        kernel=kernel,
+        normalize_y=True,
+        n_restarts_optimizer=n_restarts_optimizer,
+        random_state=0,
+    )
+    gp.fit(Xs, y)
+
+    best_idx = int(np.argmin(y))
+    return {
+        "band": band,
+        "scaler": scaler,
+        "gp": gp,
+        "n_samples": int(len(df)),
+        "best_cost": float(y[best_idx]),
+        "best_x": {
+            "kp": float(X[best_idx, 0]),
+            "ki": float(X[best_idx, 1]),
+            "kd": float(X[best_idx, 2]),
+        },
+        "training_rows": df,
+    }
+
+
+def suggest_for_band(
+    model: Optional[Dict[str, object]],
+    bounds: Dict[str, Tuple[float, float]],
+    n_candidates: int,
+    acquisition: str,
+    xi: float,
+    lcb_kappa: float,
+    seed: int,
+) -> Dict[str, object]:
+
+    if model is None:
+        raise ValueError("Cannot suggest for band because model is None.")
+
+    rng = np.random.default_rng(seed)
+
+    candidates = np.column_stack([
+        rng.uniform(bounds["kp"][0], bounds["kp"][1], size=n_candidates),
+        rng.uniform(bounds["ki"][0], bounds["ki"][1], size=n_candidates),
+        rng.uniform(bounds["kd"][0], bounds["kd"][1], size=n_candidates),
+    ])
+
+    scaler: StandardScaler = model["scaler"]
+    gp: GaussianProcessRegressor = model["gp"]
+
+    Xs = scaler.transform(candidates)
+    mu, std = gp.predict(Xs, return_std=True)
+
+    if acquisition == "ei":
+        score = expected_improvement(
+            mu=mu,
+            sigma=std,
+            y_best=float(model["best_cost"]),
+            xi=xi,
+        )
+        idx = int(np.argmax(score))
+
+        acquisition_value_name = "expected_improvement"
+        acquisition_value = float(score[idx])
+        source = "gp_expected_improvement"
+
+    elif acquisition == "lcb":
+        score = lower_confidence_bound(
+            mu=mu,
+            sigma=std,
+            kappa=lcb_kappa,
+        )
+        idx = int(np.argmin(score))
+
+        acquisition_value_name = "lcb_score"
+        acquisition_value = float(score[idx])
+        source = "gp_lower_confidence_bound"
+
+    else:
+        raise ValueError(f"Unknown acquisition function: {acquisition}")
+
+    result = {
+        "kp": float(candidates[idx, 0]),
+        "ki": float(candidates[idx, 1]),
+        "kd": float(candidates[idx, 2]),
+        "pred_cost": float(mu[idx]),
+        "pred_std": float(std[idx]),
+        "source": source,
+        "acquisition": acquisition,
+    }
+
+    result[acquisition_value_name] = acquisition_value
+
+    return result
+
+
+def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) -> Dict[str, object]:
+    models: Dict[str, Optional[Dict[str, object]]] = {}
+    suggestions: Dict[str, Dict[str, object]] = {}
+    run_ids = training_table.get(
+        "run_id", pd.Series(dtype=str)).fillna("").astype(str)
+    run_prefix_counts = run_ids.str.split(
+        "_", n=1).str[0].value_counts().to_dict()
+
+    for i, band in enumerate(BANDS):
+        model = fit_one_band_gp(
+            training_table=training_table,
+            band=band,
+            n_restarts_optimizer=args.n_restarts_optimizer,
+        )
+        models[band] = model
+
+        suggestion = suggest_for_band(
+            model=model,
+            bounds=bounds_for_band(args, band),
+            n_candidates=args.n_candidates,
+            acquisition=args.acquisition,
+            xi=args.xi,
+            lcb_kappa=args.lcb_kappa,
+            seed=args.seed + 1000 * i,
+        )
+        suggestions[band] = suggestion
+
+    models_to_pickle: Dict[str, Optional[Dict[str, object]]] = {}
+    for band, model in models.items():
+        if model is None:
+            models_to_pickle[band] = None
+            continue
+        clean = dict(model)
+        clean.pop("training_rows", None)
+        models_to_pickle[band] = clean
+
+    Path(args.models_out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.models_out, "wb") as fh:
+        pickle.dump(models_to_pickle, fh)
+
+    payload: Dict[str, object] = {
+        "suggested_controller": {
+            "far": {
+                "kp": suggestions["far"]["kp"],
+                "ki": suggestions["far"]["ki"],
+                "kd": suggestions["far"]["kd"],
+            },
+            "mid": {
+                "kp": suggestions["mid"]["kp"],
+                "ki": suggestions["mid"]["ki"],
+                "kd": suggestions["mid"]["kd"],
+            },
+            "near": {
+                "kp": suggestions["near"]["kp"],
+                "ki": suggestions["near"]["ki"],
+                "kd": suggestions["near"]["kd"],
+            },
+        },
+        "band_predictions": {
+            band: {
+                "pred_cost": suggestions[band]["pred_cost"],
+                "pred_std": suggestions[band]["pred_std"],
+                "expected_improvement": suggestions[band].get("expected_improvement"),
+                "lcb_score": suggestions[band]["lcb_score"],
+                "source": suggestions[band]["source"],
+                "n_training_samples": None if models[band] is None else models[band]["n_samples"],
+                "best_observed_cost": None if models[band] is None else models[band]["best_cost"],
+                "best_observed_triplet": None if models[band] is None else models[band]["best_x"],
+            }
+            for band in BANDS
+        },
+        "meta": {
+            "generated_at": int(time.time()),
+            "history_root": str(Path(args.history_root).resolve()),
+            "acquisition": args.acquisition,
+            "far_threshold": args.far_threshold,
+            "near_threshold": args.near_threshold,
+            "min_band_samples": args.min_band_samples,
+            "xi": args.xi,
+            "lcb_kappa": args.lcb_kappa,
+            "n_candidates": args.n_candidates,
+            "training_run_prefix_counts": {
+                str(prefix): int(count)
+                for prefix, count in run_prefix_counts.items()
+            },
+            "bounds": {
+                band: {k: list(v)
+                       for k, v in bounds_for_band(args, band).items()}
+                for band in BANDS
+            },
+            "outputs": {
+                "models": str(Path(args.models_out).resolve()),
+            },
+        },
+    }
+
+    next_out = Path(args.next_out)
+    save_json(next_out, payload)
+
+    suggestions_dir = Path(args.suggestions_dir)
+    suggestions_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = suggestions_dir / \
+        f"band_bo_next_params_{payload['meta']['generated_at']}.json"
+    save_json(snapshot, payload)
+
+    payload["meta"]["outputs"]["next_params"] = str(
+        next_out.resolve())
+    payload["meta"]["outputs"]["snapshot"] = str(
+        snapshot.resolve())
+
+    return payload
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+
+    training_table = compute_all_run_metrics(args)
+    payload = train_and_suggest(training_table, args)
+
+    print("\n=== Band GP BO summary ===")
+    n_runs = int(training_table["run_id"].nunique()
+                 ) if "run_id" in training_table.columns else 0
+    print(f"Training runs computed: {n_runs}")
+
+    print("\nSuggested controller:")
+    for band in BANDS:
+        s = payload["suggested_controller"][band]
+        pred = payload["band_predictions"][band]
+        print(
+            f"  {band:>4}: "
+            f"kp={s['kp']:.0f}, ki={s['ki']:.0f}, kd={s['kd']:.0f} "
+            f"| source={pred['source']}, "
+            f"pred_cost={pred['pred_cost']}, pred_std={pred['pred_std']}"
+        )
+
+    print("\nBest observed by band:")
+    for band in BANDS:
+        pred = payload["band_predictions"][band]
+        print(
+            f"  {band:>4}: "
+            f"n={pred['n_training_samples']}, "
+            f"best_cost={pred['best_observed_cost']}, "
+            f"best_triplet={pred['best_observed_triplet']}"
+        )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,54 @@
+FUNCTION_BLOCK PidCoefSelector
+VAR
+	m_pointsCount	:INT;
+	m_pidCoefs		:ARRAY[0..4] OF PidValues;
+	m_minRange		:REAL;
+	m_rangeWidth	:REAL;
+END_VAR
+
+
+//FB_Init is always available implicitly and it is used primarily for initialization.
+//The return value is not evaluated. For a specific influence, you can also declare the
+//methods explicitly and provide additional code there with the standard initialization
+//code. You can evaluate the return value.
+METHOD FB_Init: BOOL
+VAR_INPUT
+    bInitRetains: BOOL; // TRUE: the retain variables are initialized (reset warm / reset cold)
+    bInCopyCode: BOOL;  // TRUE: the instance will be copied to the copy code afterward (online change)
+		points		:INT;
+		minRange	:REAL;
+		maxRange	:REAL;
+END_VAR
+
+	m_pointsCount	:= points;
+	m_minRange		:= minRange;
+	m_rangeWidth	:= (maxRange - minRange) / TO_REAL(points);
+
+
+METHOD PUBLIC getCoefs : PidValues
+VAR_INPUT
+	x	:REAL;
+END_VAR
+VAR
+	intervalIndex	:INT;
+END_VAR
+
+intervalIndex := TO_INT(LIMIT(0, TRUNC( (x - m_minRange) / m_rangeWidth), m_pointsCount) );
+getCoefs := m_pidCoefs[intervalIndex];
+
+
+
+METHOD PUBLIC getCoefsIndex : PidValues
+VAR_INPUT
+	idx	:INT;
+END_VAR
+
+getCoefsIndex := m_pidCoefs[idx];
+
+METHOD PUBLIC setPoint : BOOL
+VAR_INPUT
+	index			:INT;
+	pidCoefs	:PidValues;
+END_VAR
+
+m_pidCoefs[index] := pidCoefs;

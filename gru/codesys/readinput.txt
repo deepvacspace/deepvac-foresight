@@ -1,0 +1,69 @@
+FUNCTION ReadInput : BOOL
+VAR_INPUT
+END_VAR
+VAR
+	temp_measured_raw	:REAL;
+	temp_measured			:REAL;
+
+	pres_404_low	:REAL;
+	pres_404_high	:REAL;
+	pres_23_low		:REAL;
+	pres_23_high	:REAL;
+	
+	temp_404_high :REAL;
+	temp_23_high 	:REAL;
+END_VAR
+
+
+temp_measured_raw			:= LIMIT(-200, IO_SIGNALS.MV_210_101_AI1, 300);
+globCom.pres_volt_raw	:= LIMIT(2, 	 IO_SIGNALS.MV_210_102_AI1, 10.2);
+globCom.pres_fv_volt	:= LIMIT(2, 	 IO_SIGNALS.MV_210_102_AI2, 10.2);
+
+checkRealQNAN(ADR(temp_measured_raw));
+checkRealQNAN(ADR(globCom.pres_volt_raw));
+checkRealQNAN(ADR(globCom.pres_fv_volt));
+
+temp_measured			:= globCom.tempCorrector.correct(temp_measured_raw);
+globCom.pres_volt	:= globCom.presVoltCorrector.correct(globCom.pres_volt_raw);
+globCom.pres_torr := LIMIT(1E-9, EXPT(10, 1.5*(globCom.pres_volt-8.0)), 1100) * 0.750062;  // 10^(1.5(V−8)) mbar * 0.750062 = torr
+globCom.pres_fv_torr := LIMIT(1E-9, EXPT(10, globCom.pres_fv_volt-6.125), 1100) * 0.750062; // 10^(V−6.125) mbar * 0.750062 = torr
+
+globCom.diffTemp(in := temp_measured);
+globCom.diffPresVolt(in := globCom.pres_volt);
+
+globCom.inputs := IO_SIGNALS.PLC_200_DI_1_8 OR SHL(IO_SIGNALS.PLC_200_DI_9_20, 8);
+
+IO_SIGNALS.IN_TMC_ON_WORK_FREQ := IO_SIGNALS.PLC_200_DI_1_8.4;
+
+pres_404_high := 0.0; //(LIMIT(4, IO_SIGNALS.MV_210_101_AI3, 22)-4)/16*(30+0)-0;
+pres_23_high	:= (LIMIT(4, IO_SIGNALS.MV_210_101_AI4, 22)-4)/16*(30+0)-0;
+pres_404_low	:= (LIMIT(4, IO_SIGNALS.MV_210_101_AI5, 22)-4)/16*(12+0.8)-0.8;
+pres_23_low	  := (LIMIT(4, IO_SIGNALS.MV_210_101_AI6, 22)-4)/16*(12+0.8)-0.8;
+
+temp_404_high	  := IO_SIGNALS.MV_210_101_AI7; //IO_SIGNALS.MV_210_101_AI7;
+temp_23_high	  := IO_SIGNALS.MV_210_101_AI8;
+
+globCom.states.get('pres_404_low')^.value := setNANif(pres_404_low, (pres_404_low < -2) OR (pres_404_low > 13) );
+globCom.states.get('pres_404_high')^.value := setNANif(pres_404_high, (pres_404_high < 0) OR (pres_404_high > 50) );
+globCom.states.get('pres_23_low')^.value := setNANif(pres_23_low, (pres_23_low < -2) OR (pres_23_low > 13) );
+globCom.states.get('pres_23_high')^.value := setNANif(pres_23_high, (pres_23_high < 0) OR (pres_23_high > 50) );
+
+globCom.states.get('temp_404_high')^.value := LIMIT(-100, temp_404_high, 200);
+globCom.states.get('temp_23_high')^.value := LIMIT(-80, temp_23_high, 200);
+// globCom.states.get('water_temp')^.value := LIMIT(0, IO_SIGNALS.MV_210_101_AI9, 200);
+
+globCom.states.get('inputs')^.value := bits32toReal(globCom.inputs);
+
+globCom.states.get('temp')^.value     := temp_measured;
+globCom.states.get('temp_raw')^.value := temp_measured_raw;
+
+globCom.states.get('pres')^.value     	:= globCom.pres_torr;
+globCom.states.get('pres_volt')^.value  := globCom.pres_volt;
+
+globCom.states.get('pres_raw')^.value    	:= globCom.pres_torr;
+globCom.states.get('pres_volt_raw')^.value:= globCom.pres_volt_raw;
+
+globCom.states.get('pres_fv')^.value			:= globCom.pres_fv_torr;
+globCom.states.get('pres_fv_volt')^.value := globCom.pres_fv_volt;
+
+

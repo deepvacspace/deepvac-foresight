@@ -1,0 +1,93 @@
+// Common global namespace for all PLCs (PLC200 or Virtual)
+{attribute 'qualified_only'}
+VAR_GLOBAL CONSTANT
+	settingsPathOnPLC	:STRING := '/root/CODESYS/settings.dat';
+	PROG_NUMBER	:INT	:= 59;
+	TEMP_BIT		:BYTE:= 1; // bit 0 - duration ignored =)
+	// HUM_BIT		:BYTE:= 2;
+	PRES_BIT		:BYTE:= 2;
+	AWAIT_BIT		:BYTE:= 8;
+	RAMP_BIT		:BYTE:= 9;
+	DELTA_TEMP_SKIP_TO_RESET_PID	:REAL	:= 15;
+	PERIOD_CONSTANT	:REAL := 0.1;
+	TCP_SEND_ALL_CLIENTS	:BYTE:= 255;
+	
+	NAME_SIZE	:USINT:=20;
+	STRING_BUF_SIZE_MAX :USINT:= 200;
+	
+	PACKET_HEADER_FULL	:ARRAY[0..3] OF BYTE := [16#AA, 16#55, 16#BB, 16#77];
+	PACKET_HEADER1			:BYTE	:= 16#AA;
+	PACKET_HEADER2			:BYTE	:= 16#55;
+	PACKET_HEADER3			:BYTE	:= 16#BB;
+	PACKET_HEADER4			:BYTE	:= 16#77;
+END_VAR
+VAR_GLOBAL
+	tcpServer		:TcpServer;		// Tcp server.
+	
+	m_commonicationOutcomMsgQueueBuf	:ARRAY[0..10*5-1] OF BYTE;
+	m_commonicationOutcomMsgQueue 		:QueueStatic(buf := ADR(m_commonicationOutcomMsgQueueBuf), elementSize := 5, maxSize := 10);
+	
+	m_textMsgQueueBuf	:ARRAY[0..5*200-1] OF BYTE;
+	m_textMsgQueue		:QueueStatic(buf := ADR(m_textMsgQueueBuf), elementSize := 200, maxSize := 5);
+	
+	generalBuffer	:ARRAY[0..3000] OF BYTE;	// General purpose buffer. To return data from function calls
+	dwordBuffer		:DWORD;
+	
+	states			:VarMap;			// All chamber internal states.
+	settings		:VarMap;			// Configurable by User settings.
+	
+	scheduler		:Scheduler;
+	
+	// PLC activitiy
+	// using for loading/saving and other purpose
+	xOnStartFired					:BOOL := FALSE;		// Seted on application starting
+	xOnStopFired					:BOOL := FALSE;		// Seted on application stoping (debuging???)
+	xApplicationIsrunning	:BOOL := FALSE;
+	
+	// Main pipeline
+	
+	inputs	:DWORD;
+	output1	:DWORD;
+	output_module1	:BYTE;
+	//output2	:DWORD;
+	
+	//mainStatus					:StatusType;
+	//lastActiveAlarm			:DWORD;
+	
+	status			  :Status;
+	jobHandler		:JobHandler;
+	alarmHandler	:AlarmHandler;
+	
+	xSettingsOK		:BOOL; // settings are loaded and every requested name could be found in map
+	
+	forceOutController	:ForceOutController(targetDword:=ADR(output1));
+	
+	vacuumController	:VacuumController;
+	xPresActive 		:BOOL;
+	xTM_full_stop 		:BOOL;
+	
+	pres_volt		:REAL;
+	pres_volt_raw	:REAL;
+	pres_torr		:REAL;
+	pres_torr_ref	:REAL;
+	pres_volt_ref	:REAL;
+	
+	pres_fv_volt	:REAL;
+	pres_fv_torr	:REAL;
+	
+	tempCorrector		:Corrector(pointCount:=0);
+	presVoltCorrector	:Corrector(pointCount:=0);
+	
+	diffTemp		:Diff;
+	diffPresVolt	:Diff;
+	
+	tempPidSelector		:PidCoefSelector(points:=5, minRange:=-80.0, maxRange:=200.0);
+	presPidSelector		:PidCoefSelector(points:=5, minRange:=0.0, maxRange:=100.0);
+	
+	pidTemp	:Pid(pidCoefSelector:=ADR(tempPidSelector), diff:=ADR(diffTemp), u_min:=-1.0, u_max:=1.0, xManualPidSelect:=FALSE);
+	pidPres	:Pid(pidCoefSelector:=ADR(presPidSelector), diff:=ADR(diffPresVolt), u_min:=-1.0, u_max:=1.0, xManualPidSelect:=TRUE);
+
+	light1 :Light;
+	
+	memoryIter	:BufferIterator;
+END_VAR

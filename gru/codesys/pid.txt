@@ -1,0 +1,79 @@
+FUNCTION_BLOCK Pid
+VAR CONSTANT
+	PID_I_REVERCE_MUL :REAL:=0.333; // i part multiplyer for negative error 1/0.33 = 3
+END_VAR
+VAR_INPUT
+	x_measured	:REAL;
+	x_target	:REAL;
+	enable		:BOOL;
+END_VAR
+VAR_OUTPUT
+	u			:REAL;
+	values		:PidValues;
+END_VAR
+VAR
+	m_pidCoefSelector	:POINTER TO PidCoefSelector;
+	m_diff		:POINTER TO Diff;
+	m_u_min		:REAL;
+	m_u_max		:REAL;
+	m_xManualPidSelect :BOOL;
+
+	m_P_part	:REAL;
+	m_I_part	:REAL;
+	m_D_part	:REAL;
+
+	m_pidCoefs 	:PidValues;
+	p_coef			:REAL;
+	i_coef			:REAL;
+	d_coef			:REAL;
+	delta				:REAL;
+	delta_edge	:REAL;
+END_VAR
+
+
+IF(enable) THEN
+	delta := x_target - x_measured;
+	IF (NOT m_xManualPidSelect) THEN
+		pidCoefs := m_pidCoefSelector^.getCoefs(x_measured);
+	END_IF
+	
+	p_coef  := m_pidCoefs.p;
+	i_coef	:= m_pidCoefs.i;
+	d_coef	:= m_pidCoefs.d;
+	
+	IF(0.0 <> p_coef) THEN
+		m_P_part := (1/P_coef) * delta;
+	
+		// (delta<0 AND I_part>0) OR (delta>0 AND I_part<0)
+	
+		IF( (delta*m_I_part)<0) THEN I_coef := I_coef*PID_I_REVERCE_MUL; END_IF // 1/0.5 > 1!!!
+	
+		delta_edge := 1.2 * P_coef;
+		IF( (0.0 <> i_coef) AND ABS(delta)<delta_edge ) THEN  // AND NOT(pause)
+			m_I_part := m_I_part + (1/P_coef) * (delta*0.1/I_coef);
+		ELSE
+			m_I_part := m_I_part;
+		END_IF;
+	
+		m_D_part := (1/P_coef) * (D_coef * -m_diff^.out);
+	
+		m_I_part := LIMIT(m_u_min, m_I_part, m_u_max);
+		m_D_part := LIMIT(-0.4, m_D_part, 0.4);
+	
+		u := m_P_part + m_I_part + m_D_part;
+		u := LIMIT(m_u_min, u, m_u_max);
+	
+		m_P_part := LIMIT(m_u_min, m_P_part, m_u_max);	// for logging
+	ELSE
+		u := 0;
+	END_IF;
+ELSE
+	m_P_part := 0;
+	m_I_part := 0;
+	m_D_part := 0;
+	u := 0;
+END_IF
+
+values.p := m_P_part;
+values.i := m_I_part;
+values.d := m_D_part;
