@@ -1,0 +1,48 @@
+services:
+  web:
+    build:
+      context: ./deepvac
+      dockerfile: Dockerfile
+      target: prod
+    restart: unless-stopped
+    environment:
+      - TZ=America/Mexico_City
+      - DEEPVAC_DATA_ROOT=/data/optimization
+      - DEEPVAC_GRU_ROOT=/data/gru
+    volumes:
+      - ../optimization:/data/optimization:ro
+      - ../gru:/data/gru:ro
+
+  fastapi:
+    build:
+      context: ./fastapi
+      dockerfile: Dockerfile
+      target: prod
+    env_file:
+      - ./fastapi/.env.prod
+    environment:
+      ENV: production
+      GOOGLE_APPLICATION_CREDENTIALS: /app/firebase_key.json
+    volumes:
+      - ./fastapi/firebase_key.json:/app/firebase_key.json:ro
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:latest
+    depends_on:
+      - web
+      - fastapi
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/proxy_params:/etc/nginx/proxy_params:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
