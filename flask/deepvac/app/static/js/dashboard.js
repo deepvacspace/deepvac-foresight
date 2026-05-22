@@ -7,6 +7,8 @@ const state = {
   selectedColumns: new Set(["temp", "temp_ref"]),
   compareMode: false,
   compareRuns: new Set(),
+  showSetpoint: true,
+  setpointValue: 0,
   series: null,
   simSeries: null,
   charts: new Map(),
@@ -22,6 +24,8 @@ const el = {
   activeRunTitle: document.getElementById("activeRunTitle"),
   channelList: document.getElementById("channelList"),
   toggleChannels: document.getElementById("toggleChannels"),
+  showSetpoint: document.getElementById("showSetpoint"),
+  setpointValue: document.getElementById("setpointValue"),
   compareToggle: document.getElementById("compareToggle"),
   bandMetrics: document.getElementById("bandMetrics"),
   sampleTable: document.getElementById("sampleTable"),
@@ -89,6 +93,12 @@ function toggleTheme() {
 function redrawVisibleCharts() {
   drawChart(el.canvas, el.legend, el.mainTooltip, state.series, el.chartMode.value);
   drawSimulation();
+}
+
+function activeSetpoint() {
+  const value = Number(state.setpointValue);
+  if (!state.compareMode || !state.showSetpoint || !Number.isFinite(value)) return null;
+  return value;
 }
 
 function renderRuns() {
@@ -280,6 +290,8 @@ function drawChart(canvas, legend, tooltip, payload, mode) {
 
   const allX = datasets.flatMap((dataset) => dataset.points.map((point) => point.x));
   const allY = datasets.flatMap((dataset) => dataset.points.map((point) => point.y));
+  const setpoint = canvas === el.canvas ? activeSetpoint() : null;
+  if (setpoint !== null) allY.push(setpoint);
   const b = bounds(allX, allY);
   const margin = { left: 60, right: 22, top: 20, bottom: 48 };
   const plotW = width - margin.left - margin.right;
@@ -288,6 +300,7 @@ function drawChart(canvas, legend, tooltip, payload, mode) {
   const yScale = (value) => margin.top + plotH - ((value - b.minY) / (b.maxY - b.minY || 1)) * plotH;
 
   drawGrid(ctx, width, height, margin, plotW, plotH, b);
+  if (setpoint !== null) drawSetpoint(ctx, setpoint, yScale, margin, width);
   const hitPoints = drawSeries(ctx, datasets, mode, xScale, yScale);
   renderLegend(legend, datasets);
   state.charts.set(canvas, { hitPoints, tooltip, mode });
@@ -343,6 +356,24 @@ function drawSeries(ctx, datasets, mode, xScale, yScale) {
     if (mode !== "scatter") ctx.stroke();
   });
   return hitPoints;
+}
+
+function drawSetpoint(ctx, value, yScale, margin, width) {
+  const styles = getComputedStyle(document.body);
+  const y = yScale(value);
+  ctx.save();
+  ctx.strokeStyle = styles.getPropertyValue("--muted").trim() || "#8f98a8";
+  ctx.fillStyle = styles.getPropertyValue("--muted").trim() || "#8f98a8";
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([7, 5]);
+  ctx.beginPath();
+  ctx.moveTo(margin.left, y);
+  ctx.lineTo(width - margin.right, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "11px system-ui";
+  ctx.fillText(`Setpoint ${fmt(value, 2)}`, margin.left + 8, y - 7);
+  ctx.restore();
 }
 
 function renderLegend(legend, datasets) {
@@ -455,10 +486,16 @@ async function loadRuns() {
   if (state.runs.length && !state.activeRun) await loadRun(state.runs[0].key);
 }
 
+function updateSetpointControls() {
+  el.showSetpoint.disabled = !state.compareMode;
+  el.setpointValue.disabled = !state.compareMode || !state.showSetpoint;
+}
+
 function setCompareMode(enabled) {
   state.compareMode = enabled;
   el.compareToggle.textContent = enabled ? "Compare On" : "Compare Off";
   el.compareToggle.classList.toggle("active", enabled);
+  updateSetpointControls();
   if (!enabled && state.activeRun) {
     state.compareRuns = new Set([state.activeRun]);
   } else if (enabled && state.activeRun && state.compareRuns.size === 0) {
@@ -543,6 +580,15 @@ el.chartMode.addEventListener("change", () => drawChart(el.canvas, el.legend, el
 el.resetZoom.addEventListener("click", () => drawChart(el.canvas, el.legend, el.mainTooltip, state.series, el.chartMode.value));
 el.toggleChannels.addEventListener("click", toggleAllChannels);
 el.compareToggle.addEventListener("click", () => setCompareMode(!state.compareMode));
+el.showSetpoint.addEventListener("change", () => {
+  state.showSetpoint = el.showSetpoint.checked;
+  updateSetpointControls();
+  drawChart(el.canvas, el.legend, el.mainTooltip, state.series, el.chartMode.value);
+});
+el.setpointValue.addEventListener("input", () => {
+  state.setpointValue = Number(el.setpointValue.value);
+  drawChart(el.canvas, el.legend, el.mainTooltip, state.series, el.chartMode.value);
+});
 el.toolTabs.forEach((tab) => tab.addEventListener("click", () => switchTool(tab.dataset.tool)));
 el.runSimulation.addEventListener("click", runSimulation);
 el.simChannel.addEventListener("change", drawSimulation);

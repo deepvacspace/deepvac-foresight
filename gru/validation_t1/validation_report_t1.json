@@ -1,6 +1,7 @@
 {
   "best_epoch": 95,
   "best_val_loss": 0.12196982635983399,
+  "best_val_mae_delta_t1": 0.02542043663561344,
   "best_model_path": "G:\\Other computers\\My Laptop (1)\\deepvac\\scripts\\gru\\validation_t1\\gru_t1.pt",
   "target": "temp(t+1 row) - temp(t)",
   "final_metrics": {
@@ -31,5 +32,6 @@
     "ki",
     "kd"
   ],
-  "error_sign": "error = temp_ref - temp"
+  "error_sign": "error = temp_ref - temp",
+  "optuna_enabled": false
 }

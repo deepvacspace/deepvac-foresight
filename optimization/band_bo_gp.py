@@ -116,8 +116,6 @@ def normal_cdf(z: np.ndarray) -> np.ndarray:
 
 def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: float) -> np.ndarray:
     """
-    Expected improvement for minimization.
-
     y_best is the lowest observed cost so far.
     mu is predicted cost.
     sigma is prediction uncertainty.
@@ -138,7 +136,9 @@ def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: f
 
 def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> np.ndarray:
     """
-    Lower Confidence Bound for minimization
+    Low LCB: 
+        - candidate with low predicted cost 
+        - high uncertainty.
     """
     return mu - kappa * sigma
 
@@ -418,8 +418,8 @@ def compute_near_cost(
     tail_mae = safe_mean(tail["abs_error"])
     jitter_std = safe_std(tail["error"])
 
-    os_amt = overshoot_amount(tail, init_sign)
-    overshoot = safe_mean(np.square(os_amt))
+    abs_overshoot = overshoot_amount(tail, init_sign)
+    overshoot = safe_mean(np.square(abs_overshoot))
 
     cost = (
         tail_mae_weight * tail_mae

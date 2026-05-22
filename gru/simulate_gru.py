@@ -660,7 +660,6 @@ def run_controller_substeps(
         if mode == "hold":
             temp_sub = float(current_temp_pred)
         elif mode == "real_interp_debug":
-            # Debug-only upper-bound: uses future real logged temperature.
             temp0 = float(df["temp"].iloc[end_idx])
             temp1 = float(df["temp"].iloc[end_idx + 1])
             temp_sub = interpolate(temp0, temp1, alpha)
@@ -673,7 +672,6 @@ def run_controller_substeps(
         kd_sub = interpolate(kd, next_kd, alpha)
 
         if codesys_diff is not None and args.diff_mode == "codesys":
-            # Correct CODESYS order: update Diff before PID uses m_diff^.out.
             diff_out = codesys_diff.update(temp_sub)
         else:
             sub_elapsed = interpolate(elapsed, next_elapsed, alpha)

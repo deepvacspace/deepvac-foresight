@@ -157,6 +157,25 @@ input:focus {
   padding: 0 12px;
 }
 
+.setpoint-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.setpoint-control input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+
+.setpoint-control input[type="number"] {
+  width: 72px;
+}
+
 .theme-toggle {
   width: 42px;
   padding: 0;

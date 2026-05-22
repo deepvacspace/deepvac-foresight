@@ -17,7 +17,6 @@ TIMEOUT = 10.0
 
 TEMP_REF_INDEX = 2
 
-# For a simple manual temp setpoint, use control_params defaults.
 DEFAULT_FLAGS = 3
 
 

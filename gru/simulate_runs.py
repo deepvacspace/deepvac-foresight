@@ -76,17 +76,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Candidate generation.
     ap.add_argument("--candidate-mode",
                     choices=["random", "grid"], default="random")
-    ap.add_argument("--n-candidates", type=int, default=500,
+    ap.add_argument("--n-candidates", type=int, default=1000,
                     help="Number of random candidates. Ignored for grid mode.")
     ap.add_argument("--integer-candidates", action=argparse.BooleanOptionalAction, default=True,
                     help="Round/floor candidate PID values to integers, matching your PLC workflow.")
 
-    ap.add_argument("--kp-min", type=float, default=6.0)    # 6
-    ap.add_argument("--kp-max", type=float, default=50.0)   # 50
-    ap.add_argument("--ki-min", type=float, default=200.0)  # 200
-    ap.add_argument("--ki-max", type=float, default=1000.0)  # 1000
-    ap.add_argument("--kd-min", type=float, default=5.0)    # 5
-    ap.add_argument("--kd-max", type=float, default=20.0)   # 20
+    ap.add_argument("--kp-min", type=float, default=1.0)    # 6         min 1
+    ap.add_argument("--kp-max", type=float, default=50.0)   # 50        max 50
+    ap.add_argument("--ki-min", type=float, default=1.0)  # 200       min 1
+    ap.add_argument("--ki-max", type=float,
+                    default=1000.0)  # 1000     max 1000
+    ap.add_argument("--kd-min", type=float, default=1.0)    # 5         min 1
+    ap.add_argument("--kd-max", type=float, default=20.0)   # 20        max 20
 
     ap.add_argument("--kp-values", default=None,
                     help="Comma-separated kp values for grid mode.")
@@ -101,9 +102,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--control-feature-scale", type=float, default=100.0)
     ap.add_argument("--pid-i-reverse-mul", type=float, default=0.333)
     ap.add_argument("--pid-period-s", type=float, default=0.1)
-    ap.add_argument("--pid-substep-temp-mode", choices=["hold", "linear_self"], default="hold",
-                    help="Use hold as default. linear_self is experimental and was worse overall in diagnostics.")
-    ap.add_argument("--linear-self-max-correction", type=float, default=5.0)
 
     # Initial PID state.
     ap.add_argument("--initial-i", type=float, default=0.0,
@@ -118,6 +116,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--near-band", type=float, default=2.0)
     ap.add_argument("--settle-band", type=float, default=0.5)
     ap.add_argument("--top-n", type=int, default=30)
+    ap.add_argument("--validation-top-n", type=int, default=10,
+                    help="Validate this many initially top-ranked candidates before final ranking.")
+    ap.add_argument("--validation-repeats", type=int, default=5,
+                    help="Number of repeat simulations for each validation candidate.")
 
     ap.add_argument("--w-tail-mae", type=float, default=1.0)
     ap.add_argument("--w-overshoot-rmse", type=float, default=10.0)
@@ -419,56 +421,18 @@ def simulate_candidate(
     invalid_reason = ""
 
     for step in range(n_steps):
-        t = step * dt_s
-
-        if args.pid_substep_temp_mode == "hold":
-            terms = run_pid_substeps(
-                pid=pid, diff=diff, temp_start=current_temp, temp_end=current_temp,
-                temp_ref=target_temp, kp=kp, ki=ki, kd=kd,
-                dt_s=dt_s, period_s=args.pid_period_s,
-                feature_scale=feature_scale, temp_mode="hold",
-            )
-            next_temp, pred_delta, pred_window = predict_next(
-                model=model, checkpoint=checkpoint, feature_window=feature_window,
-                feature_names=feature_names, device=device, temp=current_temp,
-                previous_temp=previous_temp, temp_ref=target_temp, dt_s=dt_s,
-                terms=terms, kp=kp, ki=ki, kd=kd,
-            )
-        else:
-            # Experimental predictor-corrector. Kept available, but hold is recommended.
-            pid_state = (pid.p_part, pid.i_part, pid.d_part)
-            diff_state = (diff.prev_value, diff.filter_out, diff.out)
-            rough_terms = run_pid_substeps(
-                pid=pid, diff=diff, temp_start=current_temp, temp_end=current_temp,
-                temp_ref=target_temp, kp=kp, ki=ki, kd=kd,
-                dt_s=dt_s, period_s=args.pid_period_s,
-                feature_scale=feature_scale, temp_mode="hold",
-            )
-            rough_next, rough_delta, _ = predict_next(
-                model=model, checkpoint=checkpoint, feature_window=feature_window,
-                feature_names=feature_names, device=device, temp=current_temp,
-                previous_temp=previous_temp, temp_ref=target_temp, dt_s=dt_s,
-                terms=rough_terms, kp=kp, ki=ki, kd=kd,
-            )
-            rough_delta = max(-args.linear_self_max_correction,
-                              min(rough_delta, args.linear_self_max_correction))
-            rough_next = current_temp + rough_delta
-
-            pid.p_part, pid.i_part, pid.d_part = pid_state
-            diff.prev_value, diff.filter_out, diff.out = diff_state
-
-            terms = run_pid_substeps(
-                pid=pid, diff=diff, temp_start=current_temp, temp_end=rough_next,
-                temp_ref=target_temp, kp=kp, ki=ki, kd=kd,
-                dt_s=dt_s, period_s=args.pid_period_s,
-                feature_scale=feature_scale, temp_mode="linear",
-            )
-            next_temp, pred_delta, pred_window = predict_next(
-                model=model, checkpoint=checkpoint, feature_window=feature_window,
-                feature_names=feature_names, device=device, temp=current_temp,
-                previous_temp=previous_temp, temp_ref=target_temp, dt_s=dt_s,
-                terms=terms, kp=kp, ki=ki, kd=kd,
-            )
+        terms = run_pid_substeps(
+            pid=pid, diff=diff, temp_start=current_temp, temp_end=current_temp,
+            temp_ref=target_temp, kp=kp, ki=ki, kd=kd,
+            dt_s=dt_s, period_s=args.pid_period_s,
+            feature_scale=feature_scale, temp_mode="hold",
+        )
+        next_temp, pred_delta, pred_window = predict_next(
+            model=model, checkpoint=checkpoint, feature_window=feature_window,
+            feature_names=feature_names, device=device, temp=current_temp,
+            previous_temp=previous_temp, temp_ref=target_temp, dt_s=dt_s,
+            terms=terms, kp=kp, ki=ki, kd=kd,
+        )
 
         if not np.isfinite(next_temp) or abs(next_temp) > float(args.max_abs_temp):
             valid = False
@@ -628,6 +592,118 @@ def print_top(ranking: pd.DataFrame, top_n: int) -> None:
         index=False, float_format=lambda x: f"{x:.4f}"))
 
 
+def rank_candidates(rows: pd.DataFrame) -> pd.DataFrame:
+    ranking = rows.drop(columns=["rank"], errors="ignore").sort_values(
+        ["valid", "cost", "tail_mae", "overshoot_max"],
+        ascending=[False, True, True, True],
+    ).reset_index(drop=True)
+    ranking.insert(0, "rank", np.arange(1, len(ranking) + 1, dtype=int))
+    return ranking
+
+
+def aggregate_validation_metrics(validation_rows: pd.DataFrame) -> pd.DataFrame:
+    grouped_rows: List[Dict[str, object]] = []
+    exclude_from_mean = {"validation_repeat", "initial_rank"}
+
+    for candidate_id, group in validation_rows.groupby("candidate_id", sort=False):
+        aggregate: Dict[str, object] = {
+            "candidate_id": int(candidate_id),
+            "validation_runs": int(len(group)),
+            "initial_rank": int(group["initial_rank"].iloc[0]),
+            "validated": True,
+            "valid": bool(group["valid"].all()),
+        }
+
+        invalid_reasons = [
+            str(reason)
+            for reason in group.get("invalid_reason", pd.Series(dtype=object)).dropna().unique()
+            if str(reason)
+        ]
+        aggregate["invalid_reason"] = "; ".join(invalid_reasons)
+
+        for column in group.columns:
+            if column in aggregate or column in exclude_from_mean:
+                continue
+            if column == "valid" or column == "invalid_reason":
+                continue
+            if pd.api.types.is_numeric_dtype(group[column]):
+                aggregate[column] = float(group[column].mean())
+
+        aggregate["candidate_id"] = int(candidate_id)
+        grouped_rows.append(aggregate)
+
+    return pd.DataFrame(grouped_rows)
+
+
+def validate_top_candidates(
+    *,
+    initial_ranking: pd.DataFrame,
+    args: argparse.Namespace,
+    model: GRUModel,
+    checkpoint: Dict[str, object],
+    feature_names: Sequence[str],
+    window_steps: int,
+    device: torch.device,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    top_n = max(0, int(args.validation_top_n))
+    repeats = max(0, int(args.validation_repeats))
+
+    if top_n == 0 or repeats == 0 or initial_ranking.empty:
+        final_ranking = initial_ranking.copy()
+        final_ranking["initial_rank"] = final_ranking["rank"]
+        final_ranking["validation_runs"] = 0
+        final_ranking["validated"] = False
+        return final_ranking, pd.DataFrame()
+
+    top_candidates = initial_ranking.head(top_n).copy()
+    validation_rows: List[Dict[str, object]] = []
+
+    print(
+        f"validating top {len(top_candidates)} candidates "
+        f"{repeats} times each before final ranking"
+    )
+    for _, top_row in top_candidates.iterrows():
+        for repeat_idx in range(repeats):
+            metrics, _ = simulate_candidate(
+                candidate_id=int(top_row["candidate_id"]),
+                kp=float(top_row["kp"]),
+                ki=float(top_row["ki"]),
+                kd=float(top_row["kd"]),
+                model=model,
+                checkpoint=checkpoint,
+                feature_names=feature_names,
+                window_steps=window_steps,
+                args=args,
+                device=device,
+                save_trajectory=False,
+            )
+            metrics["initial_rank"] = int(top_row["rank"])
+            metrics["validation_repeat"] = int(repeat_idx + 1)
+            validation_rows.append(metrics)
+
+    validation_detail = pd.DataFrame(validation_rows)
+    validation_aggregate = aggregate_validation_metrics(validation_detail)
+
+    top_candidate_ids = set(top_candidates["candidate_id"].astype(int).tolist())
+    non_validated = initial_ranking[
+        ~initial_ranking["candidate_id"].astype(int).isin(top_candidate_ids)
+    ].copy()
+    non_validated["initial_rank"] = non_validated["rank"]
+    non_validated["validation_runs"] = 0
+    non_validated["validated"] = False
+
+    combined = pd.concat(
+        [
+            validation_aggregate,
+            non_validated.drop(columns=["rank"], errors="ignore"),
+        ],
+        ignore_index=True,
+        sort=False,
+    )
+    final_ranking = rank_candidates(combined)
+    return final_ranking, validation_detail
+
+
 def main() -> None:
     args = build_arg_parser().parse_args()
     random.seed(args.seed)
@@ -659,7 +735,7 @@ def main() -> None:
     print(f"duration/dt:     {args.duration_s}s / {args.dt_s}s")
     print(f"candidate mode:  {args.candidate_mode}")
     print(f"candidates:      {n_candidates}")
-    print(f"PID temp mode:   {args.pid_substep_temp_mode}")
+    print("PID temp mode:   hold")
     print(f"run id:          {run_id}")
     print(f"output dir:      {output_dir}")
 
@@ -683,11 +759,16 @@ def main() -> None:
         )
         rows.append(metrics)
 
-    ranking = pd.DataFrame(rows).sort_values(
-        ["valid", "cost", "tail_mae", "overshoot_max"],
-        ascending=[False, True, True, True],
-    ).reset_index(drop=True)
-    ranking.insert(0, "rank", np.arange(1, len(ranking) + 1, dtype=int))
+    initial_ranking = rank_candidates(pd.DataFrame(rows))
+    ranking, validation_detail = validate_top_candidates(
+        initial_ranking=initial_ranking,
+        args=args,
+        model=model,
+        checkpoint=checkpoint,
+        feature_names=feature_names,
+        window_steps=window_steps,
+        device=device,
+    )
 
     public_ranking = ranking.drop(
         columns=[
@@ -702,6 +783,11 @@ def main() -> None:
 
     ranking_csv = output_dir / "planned_pid_candidate_ranking.csv"
     public_ranking.to_csv(ranking_csv, index=False)
+
+    validation_csv = None
+    if not validation_detail.empty:
+        validation_csv = output_dir / "planned_pid_top_validation_runs.csv"
+        validation_detail.to_csv(validation_csv, index=False)
 
     top_traj_csv = None
     if int(args.save_top_trajectories) > 0:
@@ -741,6 +827,11 @@ def main() -> None:
         },
         "candidate_mode": args.candidate_mode,
         "n_candidates": int(n_candidates),
+        "validation": {
+            "top_n": int(args.validation_top_n),
+            "repeats": int(args.validation_repeats),
+            "runs_csv": str(validation_csv) if validation_csv else None,
+        },
         "bounds": {
             "kp": [float(args.kp_min), float(args.kp_max)],
             "ki": [float(args.ki_min), float(args.ki_max)],
@@ -754,6 +845,7 @@ def main() -> None:
             "final_error": float(args.w_final_error),
         },
         "ranking_csv": str(ranking_csv),
+        "validation_csv": str(validation_csv) if validation_csv else None,
         "top_trajectories_csv": str(top_traj_csv) if top_traj_csv else None,
         "top_candidates": public_ranking.head(10).to_dict(orient="records"),
     }
@@ -764,6 +856,8 @@ def main() -> None:
     print_top(ranking, int(args.top_n))
     print("\n=== Saved ===")
     print(f"ranking csv:          {ranking_csv}")
+    if validation_csv:
+        print(f"validation csv:       {validation_csv}")
     if top_traj_csv:
         print(f"top trajectories csv: {top_traj_csv}")
     print(f"summary json:         {summary_json}")

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DeepVac Dashboard</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v=20260521f">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v=20260521g">
 </head>
 <body>
   <div class="shell">
@@ -48,6 +48,11 @@
             <h1 id="activeRunTitle">Select a run</h1>
           </div>
           <div class="toolbar">
+            <label class="setpoint-control" title="Show setpoint reference line while comparing runs">
+              <input id="showSetpoint" type="checkbox" checked disabled>
+              <span>Setpoint</span>
+              <input id="setpointValue" type="number" step="0.1" value="0" disabled>
+            </label>
             <button id="compareToggle" type="button">Compare Off</button>
             <select id="chartMode" title="Chart mode">
               <option value="line">Line</option>
@@ -151,6 +156,6 @@
       </section>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=20260521h"></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=20260521i"></script>
 </body>
 </html>
