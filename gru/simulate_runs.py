@@ -31,19 +31,18 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 try:
-    from simulate_gru import (
+    from gru_common import (
         DEFAULT_CHECKPOINT,
         DEFAULT_FEATURE_NAMES,
         GRUModel,
         ChamberPID,
         CodesysDiff,
-        limit,
         load_model,
         predict_delta_t1,
     )
 except Exception as exc:
     raise RuntimeError(
-        "Could not import simulate_gru.py" +
+        "Could not import gru_common.py" +
         repr(exc)
     )
 
