@@ -1,0 +1,2 @@
+run_id,start_ts,end_ts,duration_s,num_samples,start_temp,temp_ref,pid_source,far_kp,far_ki,far_kd,mid_kp,mid_ki,mid_kd,near_kp,near_ki,near_kd,mse,mae,cost,tail_mae,overshoot
+run_1779898170_9352d72b,1779898171.491508,1779899371.094953,1199.6034450531006,601,25.150020599365234,0.0,schedule[0],6,936,17,6,936,17,6,936,17,149.32123727162016,7.593397809267044,10.054586736951023,0.7656578719615936,0.9637908935546875
