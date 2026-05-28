@@ -2,25 +2,6 @@
 """Train, validate, tune, and test a one-step GRU plant model from history."""
 
 from __future__ import annotations
-
-import argparse
-import copy
-import json
-import sys
-from pathlib import Path
-from typing import Dict, List, Optional
-
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from gru.model import GRUModel, SequenceDataset
 from gru.utils import (
     FEATURE_NAMES,
     build_prediction_details,
@@ -37,11 +18,31 @@ from gru.utils import (
     split_runs,
     summarize_metrics_by_run,
 )
+from gru.model import GRUModel, SequenceDataset
+
+import argparse
+import copy
+import json
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 WORK_DIR = ROOT / "optimization"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_t1"
 DEFAULT_PLOTS_DIR = Path(__file__).resolve().parent / "plots_t1"
+DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -49,7 +50,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Train, validate, tune, and test a one-step GRU plant model."
     )
     ap.add_argument("--history-root", default=str(DEFAULT_HISTORY_ROOT))
-    ap.add_argument("--telemetry-names", nargs="+", default=["run_samples.csv"])
+    ap.add_argument("--telemetry-names", nargs="+",
+                    default=["run_samples.csv"])
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--plots-dir", default=str(DEFAULT_PLOTS_DIR))
     ap.add_argument("--window-steps", type=int, default=60)
@@ -81,21 +83,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--optuna-epochs",
         type=int,
-        default=40,
+        default=100,
         help="Maximum epochs per Optuna trial.",
     )
     ap.add_argument("--optuna-timeout-s", type=float, default=None)
-    ap.add_argument("--optuna-study-name", default="gru_t1")
     ap.add_argument(
-        "--optuna-storage",
-        default=None,
-        help="Optional Optuna storage URL, for example sqlite:///gru_optuna.db.",
+        "--experiment-name",
+        default="gru_t1",
+        help="Experiment name used for both MLflow and Optuna.",
     )
     ap.add_argument(
         "--optuna-pruner",
         choices=["median", "none"],
         default="median",
         help="Prune weak trials early based on validation MAE.",
+    )
+    ap.add_argument(
+        "--no-mlflow",
+        action="store_true",
+        help="Disable MLflow experiment tracking.",
+    )
+    ap.add_argument(
+        "--mlflow-tracking-uri",
+        default=None,
+        help=(
+            "MLflow tracking URI. Defaults to a local file store under "
+            f"{DEFAULT_MLFLOW_DIR}."
+        ),
+    )
+    ap.add_argument(
+        "--mlflow-run-name",
+        default=None,
+        help="Optional MLflow run name for the parent experiment run.",
     )
     return ap
 
@@ -109,11 +128,70 @@ def clone_args(
     return next_args
 
 
+def setup_mlflow(args: argparse.Namespace):
+    if args.no_mlflow:
+        return None
+
+    try:
+        import mlflow
+    except ImportError as exc:
+        raise RuntimeError(
+            "MLflow tracking is enabled but mlflow is not installed. "
+            "Install it with: pip install mlflow, or pass --no-mlflow."
+        ) from exc
+
+    tracking_uri = args.mlflow_tracking_uri or DEFAULT_MLFLOW_DIR.resolve().as_uri()
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment(args.experiment_name)
+    print(f"\nMLflow tracking URI: {tracking_uri}")
+    print(f"MLflow experiment:   {args.experiment_name}")
+    return mlflow
+
+
+def mlflow_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(str(item) for item in value)
+    return str(value)
+
+
+def log_params_with_prefix(mlflow, params: Dict[str, Any], prefix: str = "") -> None:
+    if mlflow is None:
+        return
+    mlflow.log_params({f"{prefix}{key}": mlflow_value(value)
+                      for key, value in params.items()})
+
+
+def log_dataset_to_mlflow(mlflow, data: Dict[str, object]) -> None:
+    if mlflow is None:
+        return
+    mlflow.log_params(
+        {
+            "num_train_runs": len(data["train_runs"]),
+            "num_val_runs": len(data["val_runs"]),
+            "num_test_runs": len(data["test_runs"]),
+            "num_features": len(FEATURE_NAMES),
+            "feature_names": ",".join(FEATURE_NAMES),
+        }
+    )
+    mlflow.log_metrics(
+        {
+            "num_train_sequences": float(len(data["X_train_raw"])),
+            "num_val_sequences": float(len(data["X_val_raw"])),
+            "num_test_sequences": float(len(data["X_test_raw"])),
+        }
+    )
+
+
 def build_dataset(args: argparse.Namespace) -> Dict[str, object]:
     history_root = Path(args.history_root)
     csv_paths = find_run_csvs(history_root, args.telemetry_names)
     if not csv_paths:
-        raise RuntimeError(f"No telemetry CSV files found under {history_root}")
+        raise RuntimeError(
+            f"No telemetry CSV files found under {history_root}")
 
     print(f"\nFound {len(csv_paths)} run CSV files.")
 
@@ -128,7 +206,8 @@ def build_dataset(args: argparse.Namespace) -> Dict[str, object]:
         if args.exclude_prefixes and any(
             run_id.startswith(p) for p in args.exclude_prefixes
         ):
-            skipped.append({"run_id": run_id, "path": str(csv_path), "reason": "excluded"})
+            skipped.append({"run_id": run_id, "path": str(
+                csv_path), "reason": "excluded"})
             continue
 
         try:
@@ -136,7 +215,8 @@ def build_dataset(args: argparse.Namespace) -> Dict[str, object]:
             X, y, meta = build_sequences(df, run_id, args)
             if len(X) == 0:
                 skipped.append(
-                    {"run_id": run_id, "path": str(csv_path), "reason": "no sequences"}
+                    {"run_id": run_id, "path": str(
+                        csv_path), "reason": "no sequences"}
                 )
                 continue
 
@@ -146,7 +226,8 @@ def build_dataset(args: argparse.Namespace) -> Dict[str, object]:
             run_meta["num_sequences"] = int(len(X))
             run_summaries.append(run_meta)
         except Exception as exc:
-            skipped.append({"run_id": run_id, "path": str(csv_path), "reason": str(exc)})
+            skipped.append(
+                {"run_id": run_id, "path": str(csv_path), "reason": str(exc)})
             print(f"[SKIP] {run_id}: {exc}")
 
     if not all_X:
@@ -245,6 +326,8 @@ def train_model(
     device: torch.device,
     checkpoint_path: Optional[Path] = None,
     trial=None,
+    mlflow=None,
+    metric_prefix: str = "",
 ) -> Dict[str, object]:
     train_loader, val_loader, _ = make_loaders(data, args)
     loss_fn = nn.SmoothL1Loss(beta=args.huber_beta)
@@ -307,6 +390,24 @@ def train_model(
         row.update({f"val_{k}": v for k, v in val_metrics.items()})
         history_rows.append(row)
 
+        if mlflow is not None:
+            mlflow.log_metrics(
+                {
+                    f"{metric_prefix}train_loss": train_loss,
+                    f"{metric_prefix}train_eval_loss": train_eval_loss,
+                    f"{metric_prefix}val_loss": val_loss,
+                    **{
+                        f"{metric_prefix}train_{key}": value
+                        for key, value in train_metrics.items()
+                    },
+                    **{
+                        f"{metric_prefix}val_{key}": value
+                        for key, value in val_metrics.items()
+                    },
+                },
+                step=epoch,
+            )
+
         if trial is None:
             print(
                 f"epoch={epoch:03d} "
@@ -338,7 +439,8 @@ def train_model(
 
         if patience_count >= args.patience:
             if trial is None:
-                print(f"Early stopping at epoch {epoch}. Best epoch: {best_epoch}")
+                print(
+                    f"Early stopping at epoch {epoch}. Best epoch: {best_epoch}")
             break
 
     if best_state_dict is None:
@@ -362,6 +464,7 @@ def train_model(
             "best_val_mae_delta_t1": best_val_mae,
             "best_metric": "val_loss",
             "best_metric_value": best_val_loss,
+            "trained_from_optuna_best_params": args.optuna_trials > 0,
             "train_runs": data["train_runs"],
             "val_runs": data["val_runs"],
             "test_runs": data["test_runs"],
@@ -369,6 +472,18 @@ def train_model(
             "error_sign": "error = temp_ref - temp",
         }
         torch.save(checkpoint, checkpoint_path)
+
+    if mlflow is not None:
+        mlflow.log_metrics(
+            {
+                f"{metric_prefix}best_epoch": float(best_epoch),
+                f"{metric_prefix}best_val_loss": float(best_val_loss),
+                f"{metric_prefix}best_val_mae_delta_t1": float(best_val_mae),
+                f"{metric_prefix}best_observed_val_mae_delta_t1": float(
+                    best_observed_val_mae
+                ),
+            }
+        )
 
     return {
         "model_state_dict": best_state_dict,
@@ -397,7 +512,7 @@ def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namesp
 
 
 def run_optuna(
-    args: argparse.Namespace, data: Dict[str, object], device: torch.device
+    args: argparse.Namespace, data: Dict[str, object], device: torch.device, mlflow=None
 ) -> argparse.Namespace:
     try:
         import optuna
@@ -414,8 +529,7 @@ def run_optuna(
     )
     study = optuna.create_study(
         direction="minimize",
-        study_name=args.optuna_study_name,
-        storage=args.optuna_storage,
+        study_name=args.experiment_name,
         load_if_exists=True,
         pruner=pruner,
     )
@@ -423,14 +537,42 @@ def run_optuna(
     def objective(trial):
         trial_args = suggest_optuna_args(trial, args)
         set_seed(args.seed + trial.number)
-        result = train_model(trial_args, data, device, checkpoint_path=None, trial=trial)
+        if mlflow is None:
+            result = train_model(trial_args, data, device,
+                                 checkpoint_path=None, trial=trial)
+        else:
+            with mlflow.start_run(run_name=f"optuna_trial_{trial.number}", nested=True):
+                mlflow.set_tag("phase", "optuna_trial")
+                mlflow.log_param("trial_number", trial.number)
+                log_params_with_prefix(mlflow, trial.params, prefix="trial_")
+                result = train_model(
+                    trial_args,
+                    data,
+                    device,
+                    checkpoint_path=None,
+                    trial=trial,
+                    mlflow=mlflow,
+                    metric_prefix="trial_",
+                )
+                mlflow.log_metric(
+                    "trial_objective",
+                    float(result["best_observed_val_mae_delta_t1"]),
+                )
         return float(result["best_observed_val_mae_delta_t1"])
 
     print("\n=== Optuna tuning ===")
-    study.optimize(objective, n_trials=args.optuna_trials, timeout=args.optuna_timeout_s)
+    study.optimize(objective, n_trials=args.optuna_trials,
+                   timeout=args.optuna_timeout_s)
     print(f"Best trial: {study.best_trial.number}")
     print(f"Best validation MAE: {study.best_value:.6f}")
     print(f"Best params: {study.best_params}")
+
+    if mlflow is not None:
+        mlflow.log_metric("optuna_best_val_mae_delta_t1",
+                          float(study.best_value))
+        mlflow.log_param("optuna_best_trial", study.best_trial.number)
+        log_params_with_prefix(mlflow, study.best_params,
+                               prefix="optuna_best_")
 
     output_dir = Path(args.output_dir)
     study.trials_dataframe().to_csv(output_dir / "optuna_trials.csv", index=False)
@@ -452,11 +594,12 @@ def evaluate_best_model(
     data: Dict[str, object],
     device: torch.device,
     checkpoint_path: Path,
-) -> None:
+) -> Dict[str, object]:
     _, val_loader, test_loader = make_loaders(data, args)
     loss_fn = nn.SmoothL1Loss(beta=args.huber_beta)
 
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(
+        checkpoint_path, map_location=device, weights_only=False)
     best_model = GRUModel(
         input_dim=checkpoint["input_dim"],
         hidden_dim=checkpoint["hidden_dim"],
@@ -485,18 +628,23 @@ def evaluate_best_model(
     pred_test_real = data["y_scaler"].inverse_transform(pred_test_scaled)
     target_test_real = data["y_scaler"].inverse_transform(target_test_scaled)
 
-    val_pred_df = build_prediction_details(data["meta_val"], pred_val_real, target_val_real)
-    test_pred_df = build_prediction_details(data["meta_test"], pred_test_real, target_test_real)
+    val_pred_df = build_prediction_details(
+        data["meta_val"], pred_val_real, target_val_real)
+    test_pred_df = build_prediction_details(
+        data["meta_test"], pred_test_real, target_test_real)
 
     output_dir = Path(args.output_dir)
     plots_dir = Path(args.plots_dir)
     val_per_run = summarize_metrics_by_run(val_pred_df)
     test_per_run = summarize_metrics_by_run(test_pred_df)
-    val_per_run.to_csv(output_dir / "validation_metrics_by_run.csv", index=False)
+    val_per_run.to_csv(
+        output_dir / "validation_metrics_by_run.csv", index=False)
     test_per_run.to_csv(output_dir / "test_metrics_by_run.csv", index=False)
 
-    plot_best_test_prediction(test_pred_df, test_per_run, plots_dir / "test_best_delta_t1.png")
-    plot_best_test_temperature(test_pred_df, test_per_run, plots_dir / "test_best_temperature_t1.png")
+    plot_best_test_prediction(
+        test_pred_df, test_per_run, plots_dir / "test_best_delta_t1.png")
+    plot_best_test_temperature(
+        test_pred_df, test_per_run, plots_dir / "test_best_temperature_t1.png")
     plot_best_test_temperature(
         test_pred_df,
         test_per_run,
@@ -521,6 +669,17 @@ def evaluate_best_model(
         "feature_names": FEATURE_NAMES,
         "error_sign": "error = temp_ref - temp",
         "optuna_enabled": args.optuna_trials > 0,
+        "trained_from_optuna_best_params": args.optuna_trials > 0,
+        "final_hyperparameters": {
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "dropout": args.dropout,
+            "batch_size": args.batch_size,
+            "lr": args.lr,
+            "weight_decay": args.weight_decay,
+            "grad_clip": args.grad_clip,
+            "huber_beta": args.huber_beta,
+        },
     }
     with open(output_dir / "validation_report_t1.json", "w", encoding="utf-8") as f:
         json.dump(final_report, f, indent=2)
@@ -537,6 +696,8 @@ def evaluate_best_model(
     print(f"RMSE: {test_metrics['rmse_delta_t1']:.6f} deg C")
     print(f"Bias: {test_metrics['bias_delta_t1']:.6f} deg C")
 
+    return final_report
+
 
 def train_and_validate(args: argparse.Namespace) -> None:
     set_seed(args.seed)
@@ -545,48 +706,102 @@ def train_and_validate(args: argparse.Namespace) -> None:
     plots_dir = Path(args.plots_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
+    mlflow = setup_mlflow(args)
 
-    print("=== GRU model ===")
-    data = build_dataset(args)
+    run_context = (
+        mlflow.start_run(
+            run_name=args.mlflow_run_name) if mlflow is not None else None
+    )
+    if run_context is not None:
+        run_context.__enter__()
 
-    with open(output_dir / "split_runs.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "train_runs": data["train_runs"],
-                "val_runs": data["val_runs"],
-                "test_runs": data["test_runs"],
-            },
-            f,
-            indent=2,
+    try:
+        if mlflow is not None:
+            mlflow.set_tag("model_family", "gru")
+            mlflow.set_tag("target", "temp(t+1 row) - temp(t)")
+            mlflow.set_tag("phase", "train_validate_test")
+            log_params_with_prefix(mlflow, vars(args))
+
+        print("=== GRU model ===")
+        data = build_dataset(args)
+        log_dataset_to_mlflow(mlflow, data)
+
+        with open(output_dir / "split_runs.json", "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "train_runs": data["train_runs"],
+                    "val_runs": data["val_runs"],
+                    "test_runs": data["test_runs"],
+                },
+                f,
+                indent=2,
+            )
+        pd.DataFrame(data["run_summaries"]).to_csv(
+            output_dir / "run_summaries.csv", index=False
         )
-    pd.DataFrame(data["run_summaries"]).to_csv(output_dir / "run_summaries.csv", index=False)
 
-    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    print(f"\nDevice: {device}")
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
+        print(f"\nDevice: {device}")
+        if mlflow is not None:
+            mlflow.log_param("device", str(device))
 
-    final_args = run_optuna(args, data, device) if args.optuna_trials > 0 else args
-    if final_args is not args:
-        print("\n=== Final training with best Optuna parameters ===")
-        print(
-            "Using "
-            f"hidden_dim={final_args.hidden_dim}, "
-            f"num_layers={final_args.num_layers}, "
-            f"dropout={final_args.dropout:.3f}, "
-            f"batch_size={final_args.batch_size}, "
-            f"lr={final_args.lr:.6g}, "
-            f"weight_decay={final_args.weight_decay:.6g}, "
-            f"grad_clip={final_args.grad_clip:.3f}, "
-            f"huber_beta={final_args.huber_beta:.3f}"
+        final_args = run_optuna(
+            args, data, device, mlflow) if args.optuna_trials > 0 else args
+        if final_args is not args:
+            print("\n=== Final training with best Optuna parameters ===")
+            print(
+                "Using "
+                f"hidden_dim={final_args.hidden_dim}, "
+                f"num_layers={final_args.num_layers}, "
+                f"dropout={final_args.dropout:.3f}, "
+                f"batch_size={final_args.batch_size}, "
+                f"lr={final_args.lr:.6g}, "
+                f"weight_decay={final_args.weight_decay:.6g}, "
+                f"grad_clip={final_args.grad_clip:.3f}, "
+                f"huber_beta={final_args.huber_beta:.3f}"
+            )
+            log_params_with_prefix(mlflow, vars(final_args), prefix="final_")
+
+        best_checkpoint_path = output_dir / "gru_t1.pt"
+        print("\n=== Training ===")
+        set_seed(final_args.seed)
+        result = train_model(
+            final_args,
+            data,
+            device,
+            checkpoint_path=best_checkpoint_path,
+            mlflow=mlflow,
+            metric_prefix="final_",
         )
+        pd.DataFrame(result["history_rows"]).to_csv(
+            output_dir / "training_history.csv", index=False
+        )
+        plot_training_history(
+            result["history_rows"], plots_dir / "training_mae_t1.png")
 
-    best_checkpoint_path = output_dir / "gru_t1.pt"
-    print("\n=== Training ===")
-    set_seed(final_args.seed)
-    result = train_model(final_args, data, device, checkpoint_path=best_checkpoint_path)
-    pd.DataFrame(result["history_rows"]).to_csv(output_dir / "training_history.csv", index=False)
-    plot_training_history(result["history_rows"], plots_dir / "training_mae_t1.png")
-
-    evaluate_best_model(final_args, data, device, best_checkpoint_path)
+        final_report = evaluate_best_model(
+            final_args, data, device, best_checkpoint_path)
+        if mlflow is not None:
+            mlflow.log_metrics(
+                {
+                    f"validation_{key}": float(value)
+                    for key, value in final_report["final_metrics"].items()
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    f"test_{key}": float(value)
+                    for key, value in final_report["test_metrics"].items()
+                }
+            )
+            mlflow.log_artifact(str(best_checkpoint_path),
+                                artifact_path="model")
+            mlflow.log_artifacts(str(output_dir), artifact_path="outputs")
+            mlflow.log_artifacts(str(plots_dir), artifact_path="plots")
+    finally:
+        if run_context is not None:
+            run_context.__exit__(*sys.exc_info())
 
 
 def main() -> None:

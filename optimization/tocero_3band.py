@@ -39,10 +39,17 @@ BANDS = ("far", "mid", "near")
 # (far_p, far_i, far_d, mid_p, mid_i, mid_d, near_p, near_i, near_d)
 
 PID_SCHEDULES = [
-    (7,966,1, 21,263,85,  16,105,56),
-    (7,966,1, 21,263,85,  16,105,56),
-    (7,966,1, 21,263,85,  16,105,56),
+    (1, 13, 50, 18, 260, 21, 20, 111, 31),
+    (1, 13, 50, 18, 260, 21, 20, 111, 27),
+    (1, 13, 50, 18, 262, 21, 20, 111, 31),
+    (1, 13, 50, 18, 262, 21, 20, 111, 27),
+    (1, 56, 50, 18, 260, 21, 20, 111, 31),
+    (1, 56, 50, 18, 260, 21, 20, 111, 27),
+    (1, 56, 50, 18, 262, 21, 20, 111, 31),
+    (1, 56, 50, 18, 262, 21, 20, 111, 27),
 ]
+
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
 	output_dir = Path(__file__).with_name("output")
@@ -58,6 +65,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--heatup-temp-ref", type=float, default=25.0, help="Pre-test heatup temp_ref")
 	ap.add_argument("--heatup-duration", type=float, default=5.0 * 60.0, help="Seconds at heatup temp_ref")
 	ap.add_argument("--post-heatup-cooldown", type=float, default=3.0 * 60.0, help="Seconds after heatup before test")
+	ap.add_argument(
+		"--condition-initial",
+		action="store_true",
+		help="Run heatup and post-heatup cooldown before the first test",
+	)
 	ap.add_argument("--test-temp-ref", type=float, default=0.0, help="Logged test temp_ref target")
 	ap.add_argument("--dt", type=float, default=1.0)
 	ap.add_argument("--progress-every", type=float, default=60.0)
@@ -65,7 +77,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument(
 		"--skip-preconditioning",
 		action="store_true",
-		help="Skip initial heatup and cooldown",
+		help="Skip heatup and cooldown before every test",
 	)
 
 	ap.add_argument("--entry-band", type=float, default=2.0)
@@ -134,12 +146,11 @@ def run_single_test(
 	test_label = f"{run_idx}" if total_tests is None else f"{run_idx}/{total_tests}"
 
 	temp_ref_target = float(args.test_temp_ref)
+	condition_pretest = (bool(args.condition_initial) or run_idx > 1) and not args.skip_preconditioning
 
 	print(f"[run {run_id}] starting test {test_label}")
 
-	if args.skip_preconditioning:
-		print(f"[run {run_id}] skipping preconditioning and post-heatup cooldown")
-	else:
+	if condition_pretest:
 		print(
 			f"[run {run_id}] preconditioning: temp_ref={args.heatup_temp_ref:.3f} "
 			f"for {args.heatup_duration:.1f}s (no logging)"
@@ -156,6 +167,11 @@ def run_single_test(
 		if args.post_heatup_cooldown > 0:
 			print(f"[run {run_id}] post-heatup cooldown for {args.post_heatup_cooldown:.1f}s (no logging)")
 			time.sleep(args.post_heatup_cooldown)
+	else:
+		if args.skip_preconditioning:
+			print(f"[run {run_id}] skipping preconditioning and post-heatup cooldown")
+		else:
+			print(f"[run {run_id}] skipping initial preconditioning and post-heatup cooldown")
 
 	print(f"[run {run_id}] selected temp_ref={temp_ref_target}")
 	print(

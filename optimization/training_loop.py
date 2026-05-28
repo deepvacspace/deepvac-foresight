@@ -68,6 +68,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=180.0,
         help="Seconds after heatup before the test begins.",
     )
+    ap.add_argument(
+        "--condition-initial",
+        action="store_true",
+        help="Run heatup and post-heatup cooldown before the first experiment.",
+    )
     ap.add_argument("--test-temp-ref", type=float, default=0.0,
                     help="Target temp_ref for the logged test.")
     ap.add_argument("--cross-band-1", type=float, default=7.0)
@@ -187,25 +192,29 @@ def run_band_test(
         controller: Dict[str, Dict[str, int]],
         args: argparse.Namespace,
         pid_source: str,
+        condition_pretest: bool,
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     print(f"[run {run_id}] starting test")
-    print(
-        f"[run {run_id}] preconditioning: temp_ref={args.heatup_temp_ref:.3f} "
-        f"for {args.heatup_duration:.1f}s (no logging)"
-    )
-    publish_temp_ref_job(
-        temp_ref=float(args.heatup_temp_ref),
-        duration_s=args.heatup_duration,
-        host=args.tcp_host,
-        port=args.tcp_port,
-        timeout=args.tcp_timeout,
-    )
-    time.sleep(args.heatup_duration)
-
-    if args.post_heatup_cooldown > 0:
+    if condition_pretest:
         print(
-            f"[run {run_id}] post-heatup cooldown for {args.post_heatup_cooldown:.1f}s (no logging)")
-        time.sleep(args.post_heatup_cooldown)
+            f"[run {run_id}] preconditioning: temp_ref={args.heatup_temp_ref:.3f} "
+            f"for {args.heatup_duration:.1f}s (no logging)"
+        )
+        publish_temp_ref_job(
+            temp_ref=float(args.heatup_temp_ref),
+            duration_s=args.heatup_duration,
+            host=args.tcp_host,
+            port=args.tcp_port,
+            timeout=args.tcp_timeout,
+        )
+        time.sleep(args.heatup_duration)
+
+        if args.post_heatup_cooldown > 0:
+            print(
+                f"[run {run_id}] post-heatup cooldown for {args.post_heatup_cooldown:.1f}s (no logging)")
+            time.sleep(args.post_heatup_cooldown)
+    else:
+        print(f"[run {run_id}] skipping initial preconditioning and post-heatup cooldown")
 
     temp_ref_target = float(args.test_temp_ref)
     print(f"[run {run_id}] selected temp_ref={temp_ref_target}")
@@ -396,6 +405,7 @@ def run_with_retry(
         controller: Dict[str, Dict[str, int]],
         args: argparse.Namespace,
         pid_source: str,
+        condition_pretest: bool,
 ) -> Tuple[str, pd.DataFrame, Dict[str, object]]:
     last_exc: Optional[Exception] = None
     for attempt in range(1, args.run_retry_attempts + 1):
@@ -412,6 +422,7 @@ def run_with_retry(
                 controller=controller,
                 args=args,
                 pid_source=pid_source,
+                condition_pretest=condition_pretest,
             )
             return run_id, df_samples, run_summary
         except Exception as exc:
@@ -472,8 +483,9 @@ def main() -> None:
         planned_controller = next_payload["suggested_controller"]
         pid_source = str(next_payload.get(
             "meta", {}).get("source", "band_gp_bo"))
+        condition_pretest = bool(args.condition_initial) or successful_runs > 0
         run_id, df_samples, run_summary = run_with_retry(
-            planned_controller, args, pid_source)
+            planned_controller, args, pid_source, condition_pretest)
         print(
             f"[run {run_id}] completed successfully ({successful_runs + 1}/{args.num_runs})")
         print(f"[run {run_id}] samples={run_summary['num_samples']}")

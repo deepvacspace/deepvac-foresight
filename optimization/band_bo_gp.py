@@ -11,6 +11,7 @@ import json
 import math
 import pickle
 import time
+from itertools import product
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -24,6 +25,7 @@ from sklearn.preprocessing import StandardScaler
 BANDS = ("far", "mid", "near")
 OUTPUT_DIR = Path(__file__).with_name("output")
 COEF_COLS = ("kp", "ki", "kd")
+FEATURE_COLS = ("kp", "ki", "kd", "start_temp", "target_temp")
 REQUIRED_COLS = ("timestamp", "kp", "ki", "kd", "temp", "temp_ref")
 
 
@@ -43,9 +45,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument(
         "--acquisition",
-        choices=["ei", "lcb"],
-        default="lcb",
-        help="Acquisition function: ei = Expected Improvement, lcb = Lower Confidence Bound.",
+        choices=["ei", "lcb", "eig"],
+        default="eig",
+        help=(
+            "Acquisition function: ei = Expected Improvement, "
+            "lcb = Lower Confidence Bound, eig = Expected Information Gain."
+        ),
     )
 
     ap.add_argument(
@@ -55,37 +60,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="LCB exploration parameter. Higher = more exploration, lower = more exploitation.",
     )
 
-    ap.add_argument("--far-threshold", type=float, default=7.0)
-    ap.add_argument("--near-threshold", type=float, default=2.0)
+    ap.add_argument("--far-threshold", type=float, default=10.0)
+    ap.add_argument("--near-threshold", type=float, default=3.0)
 
     ap.add_argument("--min-band-samples", type=int, default=8)
 
+    ap.add_argument("--far-mae-weight", type=float, default=0.5)
     ap.add_argument("--far-time-weight", type=float, default=0.03)
 
-    ap.add_argument("--mid-mae-weight", type=float, default=1.0)
-    ap.add_argument("--mid-overshoot-weight", type=float, default=8.0)
-    ap.add_argument("--mid-slope-weight", type=float, default=1.5)
+    ap.add_argument("--mid-mae-weight", type=float, default=0.5)
+    ap.add_argument("--mid-slope-weight", type=float, default=10.0)
 
-    ap.add_argument("--near-tail-mae-weight", type=float, default=2.0)
-    ap.add_argument("--near-jitter-weight", type=float, default=8.0)
-    ap.add_argument("--near-bias-weight", type=float, default=4.0)
-    ap.add_argument("--near-overshoot-weight", type=float, default=10.0)
+    ap.add_argument("--near-tail-mae-weight", type=float, default=3.0) # 2
+    ap.add_argument("--near-jitter-weight", type=float, default=5.0)    # 0
+    ap.add_argument("--near-overshoot-weight", type=float, default=5.0) # 10
 
     ap.add_argument("--tail-seconds", type=float, default=300.0)
 
-    ap.add_argument("--far-kp-bounds", default="5,10")
-    ap.add_argument("--far-ki-bounds", default="850,1000")
-    ap.add_argument("--far-kd-bounds", default="0,20")
+    ap.add_argument("--far-kp-bounds", default="1,20")      #5 - 10
+    ap.add_argument("--far-ki-bounds", default="1,1000")  #850 - 1000
+    ap.add_argument("--far-kd-bounds", default="1,50")      #0 - 20
 
-    ap.add_argument("--mid-kp-bounds", default="14,24")
-    ap.add_argument("--mid-ki-bounds", default="180,750")
-    ap.add_argument("--mid-kd-bounds", default="40,110")
+    ap.add_argument("--mid-kp-bounds", default="1,20")     #14 - 24
+    ap.add_argument("--mid-ki-bounds", default="1,1000")   #180 - 750
+    ap.add_argument("--mid-kd-bounds", default="1,50")    #40 - 110
 
-    ap.add_argument("--near-kp-bounds", default="14,24")
-    ap.add_argument("--near-ki-bounds", default="60,180")
-    ap.add_argument("--near-kd-bounds", default="10,80")
+    ap.add_argument("--near-kp-bounds", default="1,20")    #14 - 24
+    ap.add_argument("--near-ki-bounds", default="1,1000")   #60 - 180
+    ap.add_argument("--near-kd-bounds", default="1,50")    #10 - 80
 
-    ap.add_argument("--n-candidates", type=int, default=20000)
+    ap.add_argument("--n-candidates", type=int, default=100000)
+    ap.add_argument("--top-k", type=int, default=2,
+                    help="Number of ranked candidates to save per band.")
+    ap.add_argument("--suggest-start-temp", type=float, default=None,
+                    help="Start temperature context for the next-test suggestion. Defaults to median observed start_temp.")
+    ap.add_argument("--suggest-target-temp", type=float, default=None,
+                    help="Target temperature context for the next-test suggestion. Defaults to median observed target_temp/temp_ref.")
     ap.add_argument("--xi", type=float, default=0.01,
                     help="Expected-improvement exploration parameter.")
     ap.add_argument("--seed", type=int, default=0)
@@ -95,6 +105,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--per-run-metrics-json", default="band_metrics.json")
     ap.add_argument("--models-out", default=str(OUTPUT_DIR / "band_gp_models.pkl"))
     ap.add_argument("--next-out", default=str(OUTPUT_DIR / "band_bo_next_params.json"))
+    ap.add_argument("--combinations-out", default=str(OUTPUT_DIR / "band_bo_candidate_combinations.txt"))
     ap.add_argument("--suggestions-dir", default=str(OUTPUT_DIR / "band_bo_suggestions"))
 
     return ap
@@ -142,6 +153,18 @@ def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> n
     """
     return mu - kappa * sigma
 
+
+# --------------------------- EXPECTED INFORMATION GAIN CALCULATION ---------------------------
+
+def expected_information_gain(sigma: np.ndarray) -> np.ndarray:
+    """
+    candidates with larger predictive uncertainty are expected
+    to teach the model more. The additive entropy constant does not affect ranking,
+    but keeping the full Gaussian entropy makes the logged score interpretable.
+    """
+    sigma_safe = np.maximum(sigma, 1e-12)
+    return 0.5 * np.log(2.0 * np.pi * np.e * np.square(sigma_safe))
+
 # -------------------------------------- UTILS ---------------------------
 
 
@@ -156,6 +179,35 @@ def parse_bounds(text: str) -> Tuple[float, float]:
 def save_json(path: Path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def format_number(value: object) -> str:
+    return str(int(round(float(value))))
+
+
+def candidate_combination_lines(suggestions: Dict[str, Dict[str, object]]) -> List[str]:
+    lines: List[str] = ["PID_SCHEDULES = ["]
+    ranked_by_band = [
+        suggestions["far"]["top_candidates"],
+        suggestions["mid"]["top_candidates"],
+        suggestions["near"]["top_candidates"],
+    ]
+
+    for far, mid, near in product(*ranked_by_band):
+        values = (
+            far["kp"], far["ki"], far["kd"],
+            mid["kp"], mid["ki"], mid["kd"],
+            near["kp"], near["ki"], near["kd"],
+        )
+        lines.append("    (" + ", ".join(format_number(v) for v in values) + "),")
+
+    lines.append("]")
+    return lines
+
+
+def save_text(path: Path, lines: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def find_csv(run_dir: Path, preferred_names: List[str]) -> Optional[Path]:
@@ -174,6 +226,40 @@ def find_csv(run_dir: Path, preferred_names: List[str]) -> Optional[Path]:
             return p
 
     return None
+
+
+def load_run_summary_context(run_dir: Path) -> Dict[str, float]:
+    summary_csv = run_dir / "run_summary.csv"
+    if not summary_csv.exists() or summary_csv.stat().st_size == 0:
+        return {}
+
+    try:
+        df = pd.read_csv(summary_csv, nrows=1)
+    except Exception:
+        return {}
+
+    if df.empty:
+        return {}
+
+    row = df.iloc[0]
+    context: Dict[str, float] = {}
+    for out_key, in_key in (("start_temp", "start_temp"), ("target_temp", "temp_ref")):
+        if in_key not in row or pd.isna(row[in_key]):
+            continue
+        try:
+            context[out_key] = float(row[in_key])
+        except (TypeError, ValueError):
+            continue
+
+    return context
+
+
+def finite_or_fallback(primary: float, fallback: Optional[float]) -> float:
+    if np.isfinite(primary):
+        return float(primary)
+    if fallback is not None and np.isfinite(fallback):
+        return float(fallback)
+    return float("nan")
 
 
 def iter_run_dirs(history_root: Path) -> Iterable[Path]:
@@ -297,6 +383,7 @@ def compute_far_cost(
     df_far: pd.DataFrame,
     far_threshold: float,
     min_band_samples: int,
+    mae_weight: float,
     time_weight: float,
 ) -> Dict[str, float | int]:
     """
@@ -324,7 +411,7 @@ def compute_far_cost(
     else:
         time_to_mid = duration * 1.5
 
-    cost = far_mae + time_weight * time_to_mid
+    cost = mae_weight * far_mae + time_weight * time_to_mid
 
     return {
         "n_samples": n,
@@ -445,10 +532,15 @@ def compute_run_band_metrics(
     df = classify_bands(df, far_threshold=args.far_threshold,
                         near_threshold=args.near_threshold)
     df = add_time_and_slopes(df)
+    summary_context = load_run_summary_context(run_dir)
 
     run_id = str(df["run_id"].iloc[0]) if "run_id" in df.columns and pd.notna(
         df["run_id"].iloc[0]) else run_dir.name
     init_sign = start_error_sign(df)
+    start_temp = finite_or_fallback(
+        float(df["temp"].iloc[0]), summary_context.get("start_temp"))
+    target_temp = finite_or_fallback(
+        float(df["temp_ref"].iloc[-1]), summary_context.get("target_temp"))
 
     df_far = df[df["band"] == "far"].copy()
     df_mid = df[df["band"] == "mid"].copy()
@@ -459,6 +551,7 @@ def compute_run_band_metrics(
         df_far=df_far,
         far_threshold=args.far_threshold,
         min_band_samples=args.min_band_samples,
+        mae_weight=args.far_mae_weight,
         time_weight=args.far_time_weight,
     )
 
@@ -504,8 +597,8 @@ def compute_run_band_metrics(
             "kd": coefs["kd"],
             "cost": metrics["cost"],
             "n_samples": metrics["n_samples"],
-            "start_temp": float(df["temp"].iloc[0]),
-            "target_temp": float(df["temp_ref"].iloc[-1]),
+            "start_temp": start_temp,
+            "target_temp": target_temp,
             "duration_s": float(df["t_rel"].iloc[-1] - df["t_rel"].iloc[0]),
         }
 
@@ -546,7 +639,7 @@ def compute_all_run_metrics(args: argparse.Namespace) -> pd.DataFrame:
             f"No usable run telemetry found under {history_root}")
 
     table = pd.DataFrame(all_records)
-    for col in ("kp", "ki", "kd", "cost", "n_samples"):
+    for col in ("kp", "ki", "kd", "cost", "n_samples", "start_temp", "target_temp"):
         table[col] = pd.to_numeric(table[col], errors="coerce")
 
     return table
@@ -564,9 +657,9 @@ def fit_one_band_gp(
         & np.isfinite(pd.to_numeric(training_table["cost"], errors="coerce"))
     ].copy()
 
-    df = df.dropna(subset=["kp", "ki", "kd", "cost"])
+    df = df.dropna(subset=[*FEATURE_COLS, "cost"])
 
-    X = df[["kp", "ki", "kd"]].to_numpy(dtype=float)
+    X = df[list(FEATURE_COLS)].to_numpy(dtype=float)
     y = df["cost"].to_numpy(dtype=float)
 
     scaler = StandardScaler()
@@ -574,7 +667,7 @@ def fit_one_band_gp(
 
     kernel = (
         ConstantKernel(1.0, (1e-3, 1e3))
-        * Matern(length_scale=[1.0, 1.0, 1.0], length_scale_bounds=(1e-2, 1e2), nu=2.5)
+        * Matern(length_scale=[1.0] * len(FEATURE_COLS), length_scale_bounds=(1e-2, 1e2), nu=2.5)
         + WhiteKernel(noise_level=1e-4, noise_level_bounds=(1e-8, 1.0))
     )
 
@@ -597,15 +690,52 @@ def fit_one_band_gp(
             "kp": float(X[best_idx, 0]),
             "ki": float(X[best_idx, 1]),
             "kd": float(X[best_idx, 2]),
+            "start_temp": float(X[best_idx, 3]),
+            "target_temp": float(X[best_idx, 4]),
         },
         "training_rows": df,
+    }
+
+
+def resolve_suggestion_context(
+    training_table: pd.DataFrame,
+    args: argparse.Namespace,
+) -> Dict[str, object]:
+    def median_feature(col: str) -> float:
+        values = pd.to_numeric(training_table[col], errors="coerce")
+        values = values[np.isfinite(values)]
+        if values.empty:
+            raise ValueError(f"Cannot infer suggestion context: no finite {col} values.")
+        return float(values.median())
+
+    start_temp = (
+        float(args.suggest_start_temp)
+        if args.suggest_start_temp is not None
+        else median_feature("start_temp")
+    )
+    target_temp = (
+        float(args.suggest_target_temp)
+        if args.suggest_target_temp is not None
+        else median_feature("target_temp")
+    )
+
+    return {
+        "start_temp": start_temp,
+        "target_temp": target_temp,
+        "source": {
+            "start_temp": "argument" if args.suggest_start_temp is not None else "median_training_start_temp",
+            "target_temp": "argument" if args.suggest_target_temp is not None else "median_training_target_temp",
+        },
     }
 
 
 def suggest_for_band(
     model: Optional[Dict[str, object]],
     bounds: Dict[str, Tuple[float, float]],
+    start_temp: float,
+    target_temp: float,
     n_candidates: int,
+    top_k: int,
     acquisition: str,
     xi: float,
     lcb_kappa: float,
@@ -614,13 +744,20 @@ def suggest_for_band(
 
     if model is None:
         raise ValueError("Cannot suggest for band because model is None.")
+    if top_k < 1:
+        raise ValueError(f"top_k must be at least 1, got {top_k}.")
 
     rng = np.random.default_rng(seed)
 
-    candidates = np.column_stack([
+    candidate_coefs = np.column_stack([
         rng.uniform(bounds["kp"][0], bounds["kp"][1], size=n_candidates),
         rng.uniform(bounds["ki"][0], bounds["ki"][1], size=n_candidates),
         rng.uniform(bounds["kd"][0], bounds["kd"][1], size=n_candidates),
+    ])
+    candidates = np.column_stack([
+        candidate_coefs,
+        np.full(n_candidates, start_temp, dtype=float),
+        np.full(n_candidates, target_temp, dtype=float),
     ])
 
     scaler: StandardScaler = model["scaler"]
@@ -636,10 +773,9 @@ def suggest_for_band(
             y_best=float(model["best_cost"]),
             xi=xi,
         )
-        idx = int(np.argmax(score))
+        ranked_idx = np.argsort(-score)[:top_k]
 
         acquisition_value_name = "expected_improvement"
-        acquisition_value = float(score[idx])
         source = "gp_expected_improvement"
 
     elif acquisition == "lcb":
@@ -648,26 +784,54 @@ def suggest_for_band(
             sigma=std,
             kappa=lcb_kappa,
         )
-        idx = int(np.argmin(score))
+        ranked_idx = np.argsort(score)[:top_k]
 
         acquisition_value_name = "lcb_score"
-        acquisition_value = float(score[idx])
         source = "gp_lower_confidence_bound"
+
+    elif acquisition == "eig":
+        score = expected_information_gain(sigma=std)
+        ranked_idx = np.argsort(-score)[:top_k]
+
+        acquisition_value_name = "expected_information_gain"
+        source = "gp_expected_information_gain"
 
     else:
         raise ValueError(f"Unknown acquisition function: {acquisition}")
 
+    top_candidates: List[Dict[str, object]] = []
+    for rank, idx_raw in enumerate(ranked_idx, start=1):
+        idx = int(idx_raw)
+        candidate = {
+            "rank": rank,
+            "kp": float(candidates[idx, 0]),
+            "ki": float(candidates[idx, 1]),
+            "kd": float(candidates[idx, 2]),
+            "start_temp": float(candidates[idx, 3]),
+            "target_temp": float(candidates[idx, 4]),
+            "pred_cost": float(mu[idx]),
+            "pred_std": float(std[idx]),
+            "source": source,
+            "acquisition": acquisition,
+        }
+        candidate[acquisition_value_name] = float(score[idx])
+        top_candidates.append(candidate)
+
+    best = top_candidates[0]
     result = {
-        "kp": float(candidates[idx, 0]),
-        "ki": float(candidates[idx, 1]),
-        "kd": float(candidates[idx, 2]),
-        "pred_cost": float(mu[idx]),
-        "pred_std": float(std[idx]),
+        "kp": best["kp"],
+        "ki": best["ki"],
+        "kd": best["kd"],
+        "start_temp": best["start_temp"],
+        "target_temp": best["target_temp"],
+        "pred_cost": best["pred_cost"],
+        "pred_std": best["pred_std"],
         "source": source,
         "acquisition": acquisition,
+        "top_candidates": top_candidates,
     }
 
-    result[acquisition_value_name] = acquisition_value
+    result[acquisition_value_name] = best[acquisition_value_name]
 
     return result
 
@@ -675,6 +839,7 @@ def suggest_for_band(
 def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) -> Dict[str, object]:
     models: Dict[str, Optional[Dict[str, object]]] = {}
     suggestions: Dict[str, Dict[str, object]] = {}
+    suggestion_context = resolve_suggestion_context(training_table, args)
     run_ids = training_table.get(
         "run_id", pd.Series(dtype=str)).fillna("").astype(str)
     run_prefix_counts = run_ids.str.split(
@@ -691,7 +856,10 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
         suggestion = suggest_for_band(
             model=model,
             bounds=bounds_for_band(args, band),
+            start_temp=float(suggestion_context["start_temp"]),
+            target_temp=float(suggestion_context["target_temp"]),
             n_candidates=args.n_candidates,
+            top_k=args.top_k,
             acquisition=args.acquisition,
             xi=args.xi,
             lcb_kappa=args.lcb_kappa,
@@ -734,15 +902,21 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
             band: {
                 "pred_cost": suggestions[band]["pred_cost"],
                 "pred_std": suggestions[band]["pred_std"],
+                "start_temp": suggestions[band]["start_temp"],
+                "target_temp": suggestions[band]["target_temp"],
                 "expected_improvement": suggestions[band].get("expected_improvement"),
-                "lcb_score": suggestions[band]["lcb_score"],
+                "lcb_score": suggestions[band].get("lcb_score"),
+                "expected_information_gain": suggestions[band].get("expected_information_gain"),
                 "source": suggestions[band]["source"],
+                "top_candidates": suggestions[band]["top_candidates"],
                 "n_training_samples": None if models[band] is None else models[band]["n_samples"],
                 "best_observed_cost": None if models[band] is None else models[band]["best_cost"],
                 "best_observed_triplet": None if models[band] is None else models[band]["best_x"],
             }
             for band in BANDS
         },
+        "candidate_combinations": candidate_combination_lines(suggestions),
+        "suggestion_context": suggestion_context,
         "meta": {
             "generated_at": int(time.time()),
             "history_root": str(Path(args.history_root).resolve()),
@@ -750,9 +924,18 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
             "far_threshold": args.far_threshold,
             "near_threshold": args.near_threshold,
             "min_band_samples": args.min_band_samples,
+            "feature_columns": list(FEATURE_COLS),
+            "far_mae_weight": args.far_mae_weight,
+            "far_time_weight": args.far_time_weight,
+            "mid_mae_weight": args.mid_mae_weight,
+            "mid_slope_weight": args.mid_slope_weight,
+            "near_tail_mae_weight": args.near_tail_mae_weight,
+            "near_jitter_weight": args.near_jitter_weight,
+            "near_overshoot_weight": args.near_overshoot_weight,
             "xi": args.xi,
             "lcb_kappa": args.lcb_kappa,
             "n_candidates": args.n_candidates,
+            "top_k": args.top_k,
             "training_run_prefix_counts": {
                 str(prefix): int(count)
                 for prefix, count in run_prefix_counts.items()
@@ -769,18 +952,27 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
     }
 
     next_out = Path(args.next_out)
-    save_json(next_out, payload)
-
+    combinations_out = Path(args.combinations_out)
     suggestions_dir = Path(args.suggestions_dir)
     suggestions_dir.mkdir(parents=True, exist_ok=True)
     snapshot = suggestions_dir / \
         f"band_bo_next_params_{payload['meta']['generated_at']}.json"
-    save_json(snapshot, payload)
+    combinations_snapshot = suggestions_dir / \
+        f"band_bo_candidate_combinations_{payload['meta']['generated_at']}.txt"
 
     payload["meta"]["outputs"]["next_params"] = str(
         next_out.resolve())
+    payload["meta"]["outputs"]["candidate_combinations"] = str(
+        combinations_out.resolve())
     payload["meta"]["outputs"]["snapshot"] = str(
         snapshot.resolve())
+    payload["meta"]["outputs"]["candidate_combinations_snapshot"] = str(
+        combinations_snapshot.resolve())
+
+    save_json(next_out, payload)
+    save_text(combinations_out, payload["candidate_combinations"])
+    save_json(snapshot, payload)
+    save_text(combinations_snapshot, payload["candidate_combinations"])
 
     return payload
 

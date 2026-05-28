@@ -45,7 +45,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -73,6 +73,7 @@ except Exception as exc:
 
 
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "mpc_pid_runs"
+DEFAULT_CANDIDATE_TABLE = DEFAULT_OUTPUT_DIR / "mpc_candidate_table.csv"
 
 
 @dataclass
@@ -86,6 +87,15 @@ class SimState:
     kp: float
     ki: float
     kd: float
+
+
+@dataclass
+class CandidateTable:
+    path: Path
+    features: np.ndarray
+    pids: np.ndarray
+    history_score: np.ndarray
+    rows: pd.DataFrame
 
 
 # -----------------------------------------------------------------------------
@@ -143,7 +153,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # MPC settings.
     ap.add_argument("--mpc-horizon-s", type=float, default=60.0,
                     help="Future horizon optimized at every MPC decision.")
-    ap.add_argument("--mpc-hold-s", type=float, default=10.0,
+    ap.add_argument("--mpc-hold-s", type=float, default=20.0,
                     help="How long to apply selected PID before replanning.")
     ap.add_argument("--optimizer", choices=["cem", "random"], default="cem")
     ap.add_argument("--cem-population", type=int, default=256)
@@ -157,6 +167,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="Only change PID if best_cost < current_pid_cost - margin.")
     ap.add_argument("--max-pid-delta-frac", type=float, default=1.0,
                     help="Limit one MPC update to this fraction of each PID range. 1.0 disables the limit.")
+
+    # Offline history-seeded candidate suggestions.
+    ap.add_argument("--candidate-table", default=str(DEFAULT_CANDIDATE_TABLE),
+                    help="Prebuilt CSV from mp_build.py. Empty string disables history seeding.")
+    ap.add_argument("--history-candidates", type=int, default=24,
+                    help="Number of nearest historical PID triplets to inject into each optimizer population.")
+    ap.add_argument("--history-neighbor-pool", type=int, default=250,
+                    help="Nearest historical states considered before ranking by historical score.")
+    ap.add_argument("--history-score-weight", type=float, default=0.15,
+                    help="Weight of normalized historical cost when ranking nearest history candidates.")
+    ap.add_argument("--history-temp-scale", type=float, default=10.0)
+    ap.add_argument("--history-error-scale", type=float, default=10.0)
+    ap.add_argument("--history-time-scale", type=float, default=600.0)
+    ap.add_argument("--history-velocity-scale", type=float, default=0.2)
 
     # Cost weights for MPC horizon.
     ap.add_argument("--w-overshoot-max", type=float, default=100.0)
@@ -175,8 +199,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-abs-temp", type=float, default=100.0)
 
     # Output.
-    ap.add_argument("--save-trajectory", action=argparse.BooleanOptionalAction, default=True)
-    ap.add_argument("--print-every-decision", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--save-trajectory",
+                    action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--print-every-decision",
+                    action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--print-optimizer-progress", action=argparse.BooleanOptionalAction, default=True,
                     help="Print progress while evaluating candidates inside each MPC decision.")
     ap.add_argument("--optimizer-progress-every", type=int, default=64,
@@ -285,7 +311,8 @@ def run_pid_substeps(
         if temp_mode == "hold":
             temp_sub = float(temp_start)
         elif temp_mode == "linear":
-            temp_sub = float(temp_start) + alpha * (float(temp_end) - float(temp_start))
+            temp_sub = float(temp_start) + alpha * \
+                (float(temp_end) - float(temp_start))
         else:
             raise ValueError(f"Unknown temp_mode: {temp_mode}")
 
@@ -460,6 +487,161 @@ def clip_pid(x: np.ndarray, args: argparse.Namespace) -> np.ndarray:
     return y.astype(float)
 
 
+def candidate_feature_vector(
+    *,
+    temp: float,
+    target_temp: float,
+    elapsed_s: float,
+    temp_velocity: float,
+    current_pid: np.ndarray,
+    args: argparse.Namespace,
+) -> np.ndarray:
+    lo, hi = pid_bounds(args)
+    pid_denom = np.maximum(hi - lo, 1e-9)
+    error = float(target_temp) - float(temp)
+    return np.asarray([
+        float(temp) / max(float(args.history_temp_scale), 1e-9),
+        error / max(float(args.history_error_scale), 1e-9),
+        abs(error) / max(float(args.history_error_scale), 1e-9),
+        float(elapsed_s) / max(float(args.history_time_scale), 1e-9),
+        float(temp_velocity) / max(float(args.history_velocity_scale), 1e-9),
+        (float(current_pid[0]) - lo[0]) / pid_denom[0],
+        (float(current_pid[1]) - lo[1]) / pid_denom[1],
+        (float(current_pid[2]) - lo[2]) / pid_denom[2],
+    ], dtype=float)
+
+
+def load_candidate_table(args: argparse.Namespace) -> Optional[CandidateTable]:
+    table_arg = str(getattr(args, "candidate_table", "") or "").strip()
+    if not table_arg or int(getattr(args, "history_candidates", 0)) <= 0:
+        return None
+
+    path = Path(table_arg)
+    if not path.exists():
+        print(f"[history] candidate table not found, history seeding disabled: {path}")
+        return None
+
+    df = pd.read_csv(path)
+    required = {
+        "temp", "target_temp", "error", "abs_error", "elapsed_s", "temp_velocity",
+        "current_kp", "current_ki", "current_kd", "kp", "ki", "kd", "history_score",
+    }
+    missing = required.difference(df.columns)
+    if missing:
+        print(f"[history] candidate table missing columns {sorted(missing)}, history seeding disabled: {path}")
+        return None
+
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=list(required)).reset_index(drop=True)
+    if df.empty:
+        print(f"[history] candidate table has no usable rows, history seeding disabled: {path}")
+        return None
+
+    lo, hi = pid_bounds(args)
+    pids = df[["kp", "ki", "kd"]].to_numpy(dtype=float)
+    keep = np.all((pids >= lo) & (pids <= hi), axis=1)
+    df = df.loc[keep].reset_index(drop=True)
+    if df.empty:
+        print(f"[history] candidate table has no rows inside current PID bounds, history seeding disabled: {path}")
+        return None
+
+    features = []
+    for row in df.itertuples(index=False):
+        current_pid = np.asarray([row.current_kp, row.current_ki, row.current_kd], dtype=float)
+        features.append(candidate_feature_vector(
+            temp=float(row.temp),
+            target_temp=float(row.target_temp),
+            elapsed_s=float(row.elapsed_s),
+            temp_velocity=float(row.temp_velocity),
+            current_pid=current_pid,
+            args=args,
+        ))
+
+    table = CandidateTable(
+        path=path,
+        features=np.vstack(features),
+        pids=df[["kp", "ki", "kd"]].to_numpy(dtype=float),
+        history_score=df["history_score"].to_numpy(dtype=float),
+        rows=df,
+    )
+    print(f"[history] loaded {len(df)} candidate rows from {path}")
+    return table
+
+
+def select_history_candidates(
+    *,
+    state: SimState,
+    args: argparse.Namespace,
+    candidate_table: Optional[CandidateTable],
+) -> np.ndarray:
+    if candidate_table is None or int(args.history_candidates) <= 0:
+        return np.empty((0, 3), dtype=float)
+
+    current_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
+    temp_velocity = (float(state.temp) - float(state.previous_temp)) / max(float(args.dt_s), 1e-9)
+    query = candidate_feature_vector(
+        temp=float(state.temp),
+        target_temp=float(args.target_temp),
+        elapsed_s=float(state.elapsed_s),
+        temp_velocity=temp_velocity,
+        current_pid=current_pid,
+        args=args,
+    )
+
+    diff = candidate_table.features - query.reshape(1, -1)
+    distance = np.sqrt(np.mean(np.square(diff), axis=1))
+    pool_n = min(len(distance), max(int(args.history_candidates), int(args.history_neighbor_pool)))
+    if pool_n <= 0:
+        return np.empty((0, 3), dtype=float)
+
+    pool_idx = np.argpartition(distance, pool_n - 1)[:pool_n]
+    scores = candidate_table.history_score[pool_idx]
+    finite_scores = scores[np.isfinite(scores)]
+    if finite_scores.size:
+        score_min = float(np.min(finite_scores))
+        score_p90 = float(np.percentile(finite_scores, 90))
+        denom = max(score_p90 - score_min, 1e-9)
+        score_norm = np.clip((scores - score_min) / denom, 0.0, 10.0)
+    else:
+        score_norm = np.zeros_like(scores, dtype=float)
+
+    rank = distance[pool_idx] + float(args.history_score_weight) * score_norm
+    ordered = pool_idx[np.argsort(rank)]
+
+    selected: List[np.ndarray] = []
+    seen = set()
+    for idx in ordered:
+        pid = clip_pid(candidate_table.pids[int(idx)], args)
+        key = tuple(float(x) for x in pid)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(pid)
+        if len(selected) >= int(args.history_candidates):
+            break
+
+    if not selected:
+        return np.empty((0, 3), dtype=float)
+    return np.vstack(selected).astype(float)
+
+
+def inject_seed_candidates(
+    samples: np.ndarray,
+    seed_candidates: np.ndarray,
+    *,
+    start_idx: int,
+) -> int:
+    if seed_candidates.size == 0 or samples.size == 0:
+        return 0
+    n_room = max(0, len(samples) - int(start_idx))
+    n = min(n_room, len(seed_candidates))
+    if n <= 0:
+        return 0
+    samples[int(start_idx):int(start_idx) + n, :] = seed_candidates[:n, :]
+    return n
+
+
 def normalized_pid_distance(a: np.ndarray, b: np.ndarray, args: argparse.Namespace) -> float:
     lo, hi = pid_bounds(args)
     denom = np.maximum(hi - lo, 1e-9)
@@ -486,7 +668,8 @@ def horizon_cost(
     temps = np.asarray(temps, dtype=float)
     error = target_temp - temps
     abs_error = np.abs(error)
-    overshoot = overshoot_array(temps, start_temp=start_temp, target_temp=target_temp)
+    overshoot = overshoot_array(
+        temps, start_temp=start_temp, target_temp=target_temp)
 
     if temps.size == 0:
         return {"cost": float(args.w_invalid), "valid": False}
@@ -540,7 +723,8 @@ def rollout_constant_pid(
     # Important: deep-copy PID and diff so horizon rollouts do not mutate the real simulation state.
     state = copy.deepcopy(initial_state)
     pid_vec = clip_pid(candidate_pid, args)
-    state.kp, state.ki, state.kd = float(pid_vec[0]), float(pid_vec[1]), float(pid_vec[2])
+    state.kp, state.ki, state.kd = float(
+        pid_vec[0]), float(pid_vec[1]), float(pid_vec[2])
 
     temps: List[float] = []
     valid = True
@@ -562,7 +746,8 @@ def rollout_constant_pid(
         if not step_valid:
             break
 
-    previous_pid = np.asarray([initial_state.kp, initial_state.ki, initial_state.kd], dtype=float)
+    previous_pid = np.asarray(
+        [initial_state.kp, initial_state.ki, initial_state.kd], dtype=float)
     metrics = horizon_cost(
         temps=np.asarray(temps, dtype=float),
         candidate_pid=pid_vec,
@@ -606,15 +791,22 @@ def optimize_pid_for_state(
     device: torch.device,
     args: argparse.Namespace,
     rng: np.random.Generator,
+    candidate_table: Optional[CandidateTable] = None,
     decision_idx: int | None = None,
 ) -> Dict[str, float]:
     lo, hi = pid_bounds(args)
     current_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
-    horizon_steps = max(1, int(math.ceil(float(args.mpc_horizon_s) / float(args.dt_s))))
+    horizon_steps = max(
+        1, int(math.ceil(float(args.mpc_horizon_s) / float(args.dt_s))))
     population = max(4, int(args.cem_population))
     progress_enabled = bool(getattr(args, "print_optimizer_progress", True))
     progress_every = max(0, int(getattr(args, "optimizer_progress_every", 64)))
     decision_label = f"{int(decision_idx):03d}" if decision_idx is not None else "---"
+    history_candidates = select_history_candidates(
+        state=state,
+        args=args,
+        candidate_table=candidate_table,
+    )
 
     # Current PID baseline, used both for comparison and safety gating.
     progress_t0 = time.perf_counter()
@@ -623,7 +815,8 @@ def optimize_pid_for_state(
             f"[decision {decision_label}] optimizing "
             f"t={state.elapsed_s:.1f}s temp={state.temp:.4f} "
             f"current_pid=({current_pid[0]:.0f}, {current_pid[1]:.0f}, {current_pid[2]:.0f}) "
-            f"horizon_steps={horizon_steps}",
+            f"horizon_steps={horizon_steps} "
+            f"history_seeds={len(history_candidates)}",
             flush=True,
         )
     current_metrics, _ = rollout_constant_pid(
@@ -646,9 +839,14 @@ def optimize_pid_for_state(
     evaluated_rows: List[Dict[str, float]] = []
 
     if args.optimizer == "random":
-        samples = sample_candidates_random(rng, population, args, center=current_pid)
+        samples = sample_candidates_random(
+            rng, population, args, center=current_pid)
+        seed_start = 0
         if bool(args.include_current_candidate):
             samples[0, :] = current_pid
+            seed_start = 1
+        inject_seed_candidates(samples, history_candidates,
+                               start_idx=seed_start)
         best_cost_so_far = current_cost
         best_pid_so_far = current_pid.copy()
         for i, sample in enumerate(samples):
@@ -666,7 +864,8 @@ def optimize_pid_for_state(
             evaluated_rows.append(metrics)
             if float(metrics["cost"]) < best_cost_so_far:
                 best_cost_so_far = float(metrics["cost"])
-                best_pid_so_far = np.asarray([metrics["kp"], metrics["ki"], metrics["kd"]], dtype=float)
+                best_pid_so_far = np.asarray(
+                    [metrics["kp"], metrics["ki"], metrics["kd"]], dtype=float)
             if progress_enabled and progress_every > 0 and ((i + 1) % progress_every == 0 or i + 1 == len(samples)):
                 elapsed_ms = 1000.0 * (time.perf_counter() - progress_t0)
                 print(
@@ -690,8 +889,12 @@ def optimize_pid_for_state(
             samples = np.clip(samples, lo, hi)
             samples = np.floor(samples + 0.5)
             samples = np.clip(samples, lo, hi)
+            seed_start = 0
             if bool(args.include_current_candidate):
                 samples[0, :] = current_pid
+                seed_start = 1
+            inject_seed_candidates(samples, history_candidates,
+                                   start_idx=seed_start)
 
             iter_rows: List[Dict[str, float]] = []
             best_cost_so_far = float("inf")
@@ -712,7 +915,8 @@ def optimize_pid_for_state(
                 iter_rows.append(metrics)
                 if float(metrics["cost"]) < best_cost_so_far:
                     best_cost_so_far = float(metrics["cost"])
-                    best_pid_so_far = np.asarray([metrics["kp"], metrics["ki"], metrics["kd"]], dtype=float)
+                    best_pid_so_far = np.asarray(
+                        [metrics["kp"], metrics["ki"], metrics["kd"]], dtype=float)
                 if progress_enabled and progress_every > 0 and ((i + 1) % progress_every == 0 or i + 1 == len(samples)):
                     elapsed_ms = 1000.0 * (time.perf_counter() - progress_t0)
                     print(
@@ -724,7 +928,8 @@ def optimize_pid_for_state(
                     )
 
             iter_rows.sort(key=lambda r: float(r["cost"]))
-            elites = np.asarray([[r["kp"], r["ki"], r["kd"]] for r in iter_rows[:elite_n]], dtype=float)
+            elites = np.asarray([[r["kp"], r["ki"], r["kd"]]
+                                for r in iter_rows[:elite_n]], dtype=float)
             mean = np.mean(elites, axis=0)
             std = np.maximum(np.std(elites, axis=0), min_std)
             evaluated_rows.extend(iter_rows)
@@ -757,6 +962,7 @@ def optimize_pid_for_state(
     best["current_cost"] = current_cost
     best["n_evaluated"] = int(len(evaluated_rows))
     best["horizon_steps"] = int(horizon_steps)
+    best["n_history_candidates"] = int(len(history_candidates))
     if progress_enabled:
         total_ms = 1000.0 * (time.perf_counter() - progress_t0)
         print(
@@ -788,7 +994,8 @@ def compute_final_metrics(
 
     error = target_temp - temps
     abs_error = np.abs(error)
-    overshoot = overshoot_array(temps, start_temp=start_temp, target_temp=target_temp)
+    overshoot = overshoot_array(
+        temps, start_temp=start_temp, target_temp=target_temp)
 
     tail_start = max(0.0, float(args.duration_s) - float(args.tail_window_s))
     tail_mask = times >= tail_start
@@ -815,7 +1022,8 @@ def compute_final_metrics(
         "time_to_near_s": float(times[int(near_idx[0])]) if len(near_idx) else float(args.duration_s) + 999.0,
         "time_to_settle_s": float(times[int(settle_idx[0])]) if len(settle_idx) else float(args.duration_s) + 999.0,
         "pid_changes": int(np.sum(
-            (trajectory[["kp", "ki", "kd"]].diff().abs().sum(axis=1).fillna(0.0).to_numpy() > 1e-9)
+            (trajectory[["kp", "ki", "kd"]].diff().abs().sum(
+                axis=1).fillna(0.0).to_numpy() > 1e-9)
         )),
     }
 
@@ -828,11 +1036,13 @@ def run_mpc_simulation(
     window_steps: int,
     device: torch.device,
     args: argparse.Namespace,
+    candidate_table: Optional[CandidateTable] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, object]]:
     rng = np.random.default_rng(int(args.seed))
 
     start_temp = float(args.start_temp)
-    precondition_ref = start_temp if args.precondition_ref is None else float(args.precondition_ref)
+    precondition_ref = start_temp if args.precondition_ref is None else float(
+        args.precondition_ref)
     dt_s = float(args.dt_s)
     total_steps = max(1, int(math.ceil(float(args.duration_s) / dt_s)))
     hold_steps = max(1, int(math.ceil(float(args.mpc_hold_s) / dt_s)))
@@ -888,13 +1098,16 @@ def run_mpc_simulation(
             device=device,
             args=args,
             rng=rng,
+            candidate_table=candidate_table,
             decision_idx=decision_idx,
         )
         optimize_ms = 1000.0 * (time.perf_counter() - t0)
 
         old_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
-        new_pid = clip_pid(np.asarray([decision["kp"], decision["ki"], decision["kd"]], dtype=float), args)
-        state.kp, state.ki, state.kd = float(new_pid[0]), float(new_pid[1]), float(new_pid[2])
+        new_pid = clip_pid(np.asarray(
+            [decision["kp"], decision["ki"], decision["kd"]], dtype=float), args)
+        state.kp, state.ki, state.kd = float(
+            new_pid[0]), float(new_pid[1]), float(new_pid[2])
 
         decision_row: Dict[str, float | int | bool | str] = {
             "decision_idx": decision_idx,
@@ -917,6 +1130,7 @@ def run_mpc_simulation(
             "horizon_near_std": float(decision.get("horizon_near_std", np.nan)),
             "pid_change_norm": float(decision.get("pid_change_norm", np.nan)),
             "n_evaluated": int(decision["n_evaluated"]),
+            "n_history_candidates": int(decision.get("n_history_candidates", 0)),
             "horizon_steps": int(decision["horizon_steps"]),
             "optimize_ms": float(optimize_ms),
         }
@@ -944,7 +1158,8 @@ def run_mpc_simulation(
                 target_temp=float(args.target_temp),
                 dt_s=dt_s,
                 pid_period_s=float(args.pid_period_s),
-                feature_scale=max(abs(float(args.control_feature_scale)), 1e-9),
+                feature_scale=max(
+                    abs(float(args.control_feature_scale)), 1e-9),
                 max_abs_temp=float(args.max_abs_temp),
             )
             valid = valid and step_valid
@@ -998,11 +1213,14 @@ def main() -> None:
     output_dir = Path(args.output_dir) / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available()
+                          and not args.cpu else "cpu")
     checkpoint_path = Path(args.checkpoint)
     model, checkpoint = load_model(checkpoint_path, device)
-    feature_names = list(checkpoint.get("feature_names", DEFAULT_FEATURE_NAMES))
+    feature_names = list(checkpoint.get(
+        "feature_names", DEFAULT_FEATURE_NAMES))
     window_steps = int(checkpoint.get("window_steps", args.window_steps))
+    candidate_table = load_candidate_table(args)
 
     print("=== Continuous GRU + MPC PID scheduler ===")
     print(f"checkpoint:       {checkpoint_path}")
@@ -1014,7 +1232,9 @@ def main() -> None:
     print(f"MPC horizon/hold: {args.mpc_horizon_s}s / {args.mpc_hold_s}s")
     print(f"optimizer:        {args.optimizer}")
     print(f"population/iters: {args.cem_population} / {args.cem_iterations}")
-    print(f"PID bounds:       kp=({args.kp_min},{args.kp_max}) ki=({args.ki_min},{args.ki_max}) kd=({args.kd_min},{args.kd_max})")
+    print(f"candidate table:  {candidate_table.path if candidate_table is not None else 'disabled'}")
+    print(
+        f"PID bounds:       kp=({args.kp_min},{args.kp_max}) ki=({args.ki_min},{args.ki_max}) kd=({args.kd_min},{args.kd_max})")
     print(f"output dir:       {output_dir}")
 
     trajectory, decisions, metrics = run_mpc_simulation(
@@ -1024,6 +1244,7 @@ def main() -> None:
         window_steps=window_steps,
         device=device,
         args=args,
+        candidate_table=candidate_table,
     )
 
     trajectory_csv = output_dir / "mpc_trajectory.csv"
@@ -1054,6 +1275,10 @@ def main() -> None:
             "iterations": int(args.cem_iterations),
             "elite_frac": float(args.cem_elite_frac),
             "apply_margin": float(args.apply_margin),
+            "candidate_table": str(candidate_table.path) if candidate_table is not None else None,
+            "candidate_table_rows": int(len(candidate_table.rows)) if candidate_table is not None else 0,
+            "history_candidates": int(args.history_candidates),
+            "history_neighbor_pool": int(args.history_neighbor_pool),
         },
         "bounds": {
             "kp": [float(args.kp_min), float(args.kp_max)],

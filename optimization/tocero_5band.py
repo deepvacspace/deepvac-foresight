@@ -55,6 +55,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--heatup-temp-ref", type=float, default=25.0, help="Pre-test heatup temp_ref")
 	ap.add_argument("--heatup-duration", type=float, default=5.0 * 60.0, help="Seconds at heatup temp_ref")
 	ap.add_argument("--post-heatup-cooldown", type=float, default=3.0 * 60.0, help="Seconds after heatup before test")
+	ap.add_argument(
+		"--condition-initial",
+		action="store_true",
+		help="Run heatup and post-heatup cooldown before the first test",
+	)
 	ap.add_argument("--test-temp-ref", type=float, default=0.0, help="Logged test temp_ref target")
 	ap.add_argument("--dt", type=float, default=1.0)
 	ap.add_argument("--progress-every", type=float, default=60.0)
@@ -138,24 +143,28 @@ def run_single_test(
 	test_label = f"{run_idx}" if total_tests is None else f"{run_idx}/{total_tests}"
 
 	temp_ref_target = float(args.test_temp_ref)
+	condition_pretest = bool(args.condition_initial) or run_idx > 1
 
 	print(f"[run {run_id}] starting test {test_label}")
-	print(
-		f"[run {run_id}] preconditioning: temp_ref={args.heatup_temp_ref:.3f} "
-		f"for {args.heatup_duration:.1f}s (no logging)"
-	)
-	publish_temp_ref_job(
-		temp_ref=float(args.heatup_temp_ref),
-		duration_s=args.heatup_duration,
-		host=args.tcp_host,
-		port=args.tcp_port,
-		timeout=args.tcp_timeout,
-	)
-	time.sleep(args.heatup_duration)
+	if condition_pretest:
+		print(
+			f"[run {run_id}] preconditioning: temp_ref={args.heatup_temp_ref:.3f} "
+			f"for {args.heatup_duration:.1f}s (no logging)"
+		)
+		publish_temp_ref_job(
+			temp_ref=float(args.heatup_temp_ref),
+			duration_s=args.heatup_duration,
+			host=args.tcp_host,
+			port=args.tcp_port,
+			timeout=args.tcp_timeout,
+		)
+		time.sleep(args.heatup_duration)
 
-	if args.post_heatup_cooldown > 0:
-		print(f"[run {run_id}] post-heatup cooldown for {args.post_heatup_cooldown:.1f}s (no logging)")
-		time.sleep(args.post_heatup_cooldown)
+		if args.post_heatup_cooldown > 0:
+			print(f"[run {run_id}] post-heatup cooldown for {args.post_heatup_cooldown:.1f}s (no logging)")
+			time.sleep(args.post_heatup_cooldown)
+	else:
+		print(f"[run {run_id}] skipping initial preconditioning and post-heatup cooldown")
 
 	print(f"[run {run_id}] selected temp_ref={temp_ref_target}")
 	print(
