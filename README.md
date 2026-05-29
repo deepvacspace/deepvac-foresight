@@ -1,4 +1,4 @@
-# DeepVac
+# Deepvac
 Main repository for DeepVac AI Advisor
 
 - **bo/** - Initial tests for using Bayesian Optimization
