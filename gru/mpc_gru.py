@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Continuous GRU + MPC PID scheduler for a thermal chamber.
 
-This script is the MPC version of your fixed-PID GRU simulator.
-Instead of evaluating one constant (kp, ki, kd) for the full run, it repeatedly:
-
 1. Reads the current simulated state.
 2. Uses the GRU as the plant model.
-3. Optimizes integer PID coefficients with CEM/random shooting over a short horizon.
+3. Optimizes PID coefficients with CEM/random shooting over a short horizon.
 4. Applies the best PID only for a short hold interval.
 5. Replans from the new state.
 
@@ -19,17 +16,8 @@ Example:
         --duration-s 1200 \
         --dt-s 2 \
         --mpc-horizon-s 60 \
-        --mpc-hold-s 10 \
-        --cem-population 256 \
-        --cem-iterations 3 \
-        --save-trajectory
+        --mpc-hold-s 10
 
-Main objective:
-    minimize overshoot first, then tail MAE and tail std for stabilization.
-
-Important:
-    Put this file in the same directory as gru_common.py, or run it from a
-    directory where gru_common.py is importable.
 """
 
 from __future__ import annotations
@@ -518,7 +506,8 @@ def load_candidate_table(args: argparse.Namespace) -> Optional[CandidateTable]:
 
     path = Path(table_arg)
     if not path.exists():
-        print(f"[history] candidate table not found, history seeding disabled: {path}")
+        print(
+            f"[history] candidate table not found, history seeding disabled: {path}")
         return None
 
     df = pd.read_csv(path)
@@ -528,14 +517,17 @@ def load_candidate_table(args: argparse.Namespace) -> Optional[CandidateTable]:
     }
     missing = required.difference(df.columns)
     if missing:
-        print(f"[history] candidate table missing columns {sorted(missing)}, history seeding disabled: {path}")
+        print(
+            f"[history] candidate table missing columns {sorted(missing)}, history seeding disabled: {path}")
         return None
 
     for col in required:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=list(required)).reset_index(drop=True)
+    df = df.replace(
+        [np.inf, -np.inf], np.nan).dropna(subset=list(required)).reset_index(drop=True)
     if df.empty:
-        print(f"[history] candidate table has no usable rows, history seeding disabled: {path}")
+        print(
+            f"[history] candidate table has no usable rows, history seeding disabled: {path}")
         return None
 
     lo, hi = pid_bounds(args)
@@ -543,12 +535,14 @@ def load_candidate_table(args: argparse.Namespace) -> Optional[CandidateTable]:
     keep = np.all((pids >= lo) & (pids <= hi), axis=1)
     df = df.loc[keep].reset_index(drop=True)
     if df.empty:
-        print(f"[history] candidate table has no rows inside current PID bounds, history seeding disabled: {path}")
+        print(
+            f"[history] candidate table has no rows inside current PID bounds, history seeding disabled: {path}")
         return None
 
     features = []
     for row in df.itertuples(index=False):
-        current_pid = np.asarray([row.current_kp, row.current_ki, row.current_kd], dtype=float)
+        current_pid = np.asarray(
+            [row.current_kp, row.current_ki, row.current_kd], dtype=float)
         features.append(candidate_feature_vector(
             temp=float(row.temp),
             target_temp=float(row.target_temp),
@@ -579,7 +573,8 @@ def select_history_candidates(
         return np.empty((0, 3), dtype=float)
 
     current_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
-    temp_velocity = (float(state.temp) - float(state.previous_temp)) / max(float(args.dt_s), 1e-9)
+    temp_velocity = (float(state.temp) - float(state.previous_temp)
+                     ) / max(float(args.dt_s), 1e-9)
     query = candidate_feature_vector(
         temp=float(state.temp),
         target_temp=float(args.target_temp),
@@ -591,7 +586,8 @@ def select_history_candidates(
 
     diff = candidate_table.features - query.reshape(1, -1)
     distance = np.sqrt(np.mean(np.square(diff), axis=1))
-    pool_n = min(len(distance), max(int(args.history_candidates), int(args.history_neighbor_pool)))
+    pool_n = min(len(distance), max(
+        int(args.history_candidates), int(args.history_neighbor_pool)))
     if pool_n <= 0:
         return np.empty((0, 3), dtype=float)
 
@@ -1232,7 +1228,8 @@ def main() -> None:
     print(f"MPC horizon/hold: {args.mpc_horizon_s}s / {args.mpc_hold_s}s")
     print(f"optimizer:        {args.optimizer}")
     print(f"population/iters: {args.cem_population} / {args.cem_iterations}")
-    print(f"candidate table:  {candidate_table.path if candidate_table is not None else 'disabled'}")
+    print(
+        f"candidate table:  {candidate_table.path if candidate_table is not None else 'disabled'}")
     print(
         f"PID bounds:       kp=({args.kp_min},{args.kp_max}) ki=({args.ki_min},{args.ki_max}) kd=({args.kd_min},{args.kd_max})")
     print(f"output dir:       {output_dir}")

@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 """Build an offline candidate table for history-seeded GRU MPC.
-
-The MPC runtime should not scan all historical runs every time it needs a PID
-suggestion. This script does that heavier work once and writes a compact CSV
-that mpc_gru.py can load quickly.
 """
 
 from __future__ import annotations
@@ -77,13 +73,17 @@ def read_run_history(args: argparse.Namespace) -> List[pd.DataFrame]:
         samples["target_temp"] = safe_numeric(samples["temp_ref"])
         samples["error"] = samples["target_temp"] - samples["temp"]
         samples["abs_error"] = samples["error"].abs()
-        samples["temp_velocity"] = samples["temp"].diff() / samples["elapsed_s"].diff().replace(0.0, np.nan)
-        samples["temp_velocity"] = samples["temp_velocity"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-        samples["band"] = classify_band(samples["abs_error"], args.far_threshold, args.near_threshold)
+        samples["temp_velocity"] = samples["temp"].diff(
+        ) / samples["elapsed_s"].diff().replace(0.0, np.nan)
+        samples["temp_velocity"] = samples["temp_velocity"].replace(
+            [np.inf, -np.inf], np.nan).fillna(0.0)
+        samples["band"] = classify_band(
+            samples["abs_error"], args.far_threshold, args.near_threshold)
 
         for col in ["kp", "ki", "kd"]:
             samples[col] = safe_numeric(samples[col])
-            metrics[col] = safe_numeric(metrics[col]) if col in metrics.columns else np.nan
+            metrics[col] = safe_numeric(
+                metrics[col]) if col in metrics.columns else np.nan
 
         metric_cols = [
             "run_id", "band", "kp", "ki", "kd", "cost", "n_samples",
@@ -107,10 +107,12 @@ def read_run_history(args: argparse.Namespace) -> List[pd.DataFrame]:
             how="left",
             suffixes=("", "_metric"),
         )
-        state_rows["history_score"] = state_rows["history_score"].fillna(state_rows["abs_error"])
+        state_rows["history_score"] = state_rows["history_score"].fillna(
+            state_rows["abs_error"])
 
         if args.max_samples_per_run > 0 and len(state_rows) > args.max_samples_per_run:
-            idx = np.linspace(0, len(state_rows) - 1, args.max_samples_per_run).round().astype(int)
+            idx = np.linspace(0, len(state_rows) - 1,
+                              args.max_samples_per_run).round().astype(int)
             state_rows = state_rows.iloc[np.unique(idx)].copy()
 
         state_rows["current_kp"] = state_rows["kp"]
@@ -133,7 +135,8 @@ def read_mpc_decisions(args: argparse.Namespace) -> List[pd.DataFrame]:
         except Exception as exc:
             print(f"[SKIP] {path}: {exc}")
             continue
-        required = {"elapsed_s", "temp", "error", "old_kp", "old_ki", "old_kd", "kp", "ki", "kd", "mpc_cost"}
+        required = {"elapsed_s", "temp", "error", "old_kp",
+                    "old_ki", "old_kd", "kp", "ki", "kd", "mpc_cost"}
         if not required.issubset(df.columns):
             continue
 
@@ -144,8 +147,10 @@ def read_mpc_decisions(args: argparse.Namespace) -> List[pd.DataFrame]:
         out["error"] = safe_numeric(df["error"])
         out["abs_error"] = out["error"].abs()
         out["target_temp"] = out["temp"] + out["error"]
-        out["temp_velocity"] = out["temp"].diff() / out["elapsed_s"].diff().replace(0.0, np.nan)
-        out["temp_velocity"] = out["temp_velocity"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        out["temp_velocity"] = out["temp"].diff(
+        ) / out["elapsed_s"].diff().replace(0.0, np.nan)
+        out["temp_velocity"] = out["temp_velocity"].replace(
+            [np.inf, -np.inf], np.nan).fillna(0.0)
         out["current_kp"] = safe_numeric(df["old_kp"])
         out["current_ki"] = safe_numeric(df["old_ki"])
         out["current_kd"] = safe_numeric(df["old_kd"])
@@ -154,7 +159,8 @@ def read_mpc_decisions(args: argparse.Namespace) -> List[pd.DataFrame]:
         out["kd"] = safe_numeric(df["kd"])
         out["history_score"] = safe_numeric(df["mpc_cost"])
         out["cost"] = out["history_score"]
-        out["band"] = classify_band(out["abs_error"], args.far_threshold, args.near_threshold)
+        out["band"] = classify_band(
+            out["abs_error"], args.far_threshold, args.near_threshold)
         rows.append(out)
 
     return rows
@@ -180,13 +186,16 @@ def finalize_table(frames: List[pd.DataFrame]) -> pd.DataFrame:
     numeric_cols = [c for c in columns if c not in {"run_id", "band"}]
     for col in numeric_cols:
         out[col] = safe_numeric(out[col])
-    out = out.dropna(subset=["temp", "target_temp", "error", "kp", "ki", "kd", "history_score"])
-    out = out.sort_values(["history_score", "abs_error"]).reset_index(drop=True)
+    out = out.dropna(subset=["temp", "target_temp",
+                     "error", "kp", "ki", "kd", "history_score"])
+    out = out.sort_values(["history_score", "abs_error"]
+                          ).reset_index(drop=True)
     return out
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Build compact historical PID candidate table for GRU MPC.")
+    ap = argparse.ArgumentParser(
+        description="Build compact historical PID candidate table for GRU MPC.")
     ap.add_argument("--history-root", default=str(DEFAULT_HISTORY_ROOT))
     ap.add_argument("--mpc-root", default=str(DEFAULT_MPC_ROOT))
     ap.add_argument("--output", default=str(DEFAULT_OUTPUT))
@@ -215,7 +224,8 @@ def main() -> None:
     print(f"rows:   {len(table)}")
     print(f"output: {output}")
     if len(table):
-        print(table[["band", "temp", "error", "kp", "ki", "kd", "history_score"]].head(10).to_string(index=False))
+        print(table[["band", "temp", "error", "kp", "ki", "kd",
+              "history_score"]].head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
