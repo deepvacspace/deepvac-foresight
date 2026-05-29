@@ -46,7 +46,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--acquisition",
         choices=["ei", "lcb", "eig"],
-        default="eig",
+        default="lcb",
         help=(
             "Acquisition function: ei = Expected Improvement, "
             "lcb = Lower Confidence Bound, eig = Expected Information Gain."
@@ -56,7 +56,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--lcb-kappa",
         type=float,
-        default=0.5,
+        default=0.3,
         help="LCB exploration parameter. Higher = more exploration, lower = more exploitation.",
     )
 

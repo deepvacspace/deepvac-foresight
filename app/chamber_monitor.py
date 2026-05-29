@@ -77,13 +77,6 @@ class ChamberMonitorApp(tk.Tk):
         title = ttk.Label(root, text="DeepVac Chamber", font=("Segoe UI", 18, "bold"))
         title.pack(anchor="w")
 
-        subtitle = ttk.Label(
-            root,
-            text="Polls get_states every 30 seconds through tcp_common.py.",
-            foreground="#526070",
-        )
-        subtitle.pack(anchor="w", pady=(2, 16))
-
         status_frame = ttk.Frame(root)
         status_frame.pack(fill=tk.X)
         status_frame.columnconfigure((0, 1), weight=1)
