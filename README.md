@@ -1,5 +1,5 @@
 # Deepvac
-Main repository for DeepVac AI Advisor
+Main repository for Deepvac AI Advisor
 
 - **bo/** - Initial tests for using Bayesian Optimization
 - **bo_common.py** - Utility functions for Bayesian Optimization (still actively used)
