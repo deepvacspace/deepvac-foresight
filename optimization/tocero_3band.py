@@ -83,8 +83,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--entry-band", type=float, default=2.0)
 	ap.add_argument("--overshoot-weight", type=float, default=10.0)
 
-	ap.add_argument("--cross-band-1", type=float, default=7.0)
-	ap.add_argument("--cross-band-2", type=float, default=2.0)
+	ap.add_argument("--cross-band-1", type=float, default=10.0)
+	ap.add_argument("--cross-band-2", type=float, default=3.0)
 
 	ap.add_argument("--temp-ref-min", type=float, default=-20.0)
 	ap.add_argument("--temp-ref-max", type=float, default=30.0)

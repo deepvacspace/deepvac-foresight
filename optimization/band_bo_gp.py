@@ -90,7 +90,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--near-kd-bounds", default="1,50")    #10 - 80
 
     ap.add_argument("--n-candidates", type=int, default=100000)
-    ap.add_argument("--top-k", type=int, default=2,
+    ap.add_argument("--top-k", type=int, default=3,
                     help="Number of ranked candidates to save per band.")
     ap.add_argument("--suggest-start-temp", type=float, default=None,
                     help="Start temperature context for the next-test suggestion. Defaults to median observed start_temp.")
@@ -188,9 +188,9 @@ def format_number(value: object) -> str:
 def candidate_combination_lines(suggestions: Dict[str, Dict[str, object]]) -> List[str]:
     lines: List[str] = ["PID_SCHEDULES = ["]
     ranked_by_band = [
-        suggestions["far"]["top_candidates"],
-        suggestions["mid"]["top_candidates"],
-        suggestions["near"]["top_candidates"],
+        suggestions["far"]["top_candidates"][:1],
+        suggestions["mid"]["top_candidates"][:3],
+        suggestions["near"]["top_candidates"][:3],
     ]
 
     for far, mid, near in product(*ranked_by_band):
@@ -936,6 +936,11 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
             "lcb_kappa": args.lcb_kappa,
             "n_candidates": args.n_candidates,
             "top_k": args.top_k,
+            "combination_export_top_by_band": {
+                "far": 1,
+                "mid": 3,
+                "near": 3,
+            },
             "training_run_prefix_counts": {
                 str(prefix): int(count)
                 for prefix, count in run_prefix_counts.items()
