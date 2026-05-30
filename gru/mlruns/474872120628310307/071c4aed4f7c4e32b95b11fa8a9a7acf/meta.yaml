@@ -1,0 +1,14 @@
+artifact_uri: file:///G:/Other%20computers/My%20Laptop%20%281%29/deepvac/scripts/gru/mlruns/474872120628310307/071c4aed4f7c4e32b95b11fa8a9a7acf/artifacts
+end_time: 1780068356610
+entry_point_name: ''
+experiment_id: '474872120628310307'
+lifecycle_stage: active
+run_id: 071c4aed4f7c4e32b95b11fa8a9a7acf
+run_name: optuna_trial_48
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1780068245059
+status: 4
+tags: []
+user_id: Anton

@@ -1,25 +1,25 @@
 {
-  "best_epoch": 59,
-  "best_val_loss": 0.21178914887243755,
-  "best_val_mae_delta_t1": 0.028539877384901047,
-  "best_model_path": "G:\\Other computers\\My Laptop (1)\\deepvac\\scripts\\gru\\validation_t1\\gru_t1.pt",
+  "best_epoch": 81,
+  "best_val_loss": 0.18063286647200585,
+  "best_val_mae_delta_t1": 0.01970527321100235,
+  "best_model_path": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\gru\\validation_t1\\gru_t1.pt",
   "target": "temp(t+1 row) - temp(t)",
   "final_metrics": {
-    "mae_delta_t1": 0.028539877384901047,
-    "rmse_delta_t1": 0.07765935361385345,
-    "bias_delta_t1": 0.004962322302162647
+    "mae_delta_t1": 0.01970527321100235,
+    "rmse_delta_t1": 0.02893328107893467,
+    "bias_delta_t1": -0.00014425264089368284
   },
   "test_metrics": {
-    "mae_delta_t1": 0.02655838243663311,
-    "rmse_delta_t1": 0.0458935871720314,
-    "bias_delta_t1": 0.0013216238003224134
+    "mae_delta_t1": 0.026163216680288315,
+    "rmse_delta_t1": 0.13933449983596802,
+    "bias_delta_t1": 0.002513742074370384
   },
-  "num_train_runs": 89,
-  "num_val_runs": 11,
-  "num_test_runs": 11,
-  "num_train_sequences": 46433,
-  "num_val_sequences": 4668,
-  "num_test_sequences": 5097,
+  "num_train_runs": 118,
+  "num_val_runs": 15,
+  "num_test_runs": 15,
+  "num_train_sequences": 60495,
+  "num_val_sequences": 7946,
+  "num_test_sequences": 7794,
   "feature_names": [
     "temp",
     "temp_ref",
@@ -36,13 +36,13 @@
   "optuna_enabled": true,
   "trained_from_optuna_best_params": true,
   "final_hyperparameters": {
-    "hidden_dim": 256,
+    "hidden_dim": 96,
     "num_layers": 1,
-    "dropout": 0.061606950133736724,
+    "dropout": 0.044044890703967665,
     "batch_size": 64,
-    "lr": 0.0006123539595056266,
-    "weight_decay": 0.0012550022503525242,
-    "grad_clip": 1.3129794959872054,
-    "huber_beta": 0.20853983348823607
+    "lr": 0.0007665041744236089,
+    "weight_decay": 2.626419082619746e-06,
+    "grad_clip": 2.6257404598600322,
+    "huber_beta": 0.13383647545532043
   }
 }

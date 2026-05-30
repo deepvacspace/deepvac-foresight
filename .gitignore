@@ -13,6 +13,8 @@ history*/
 **/history*/
 /old_plots
 flask/fastapi/
+/bo
+/opc
 
 nginx/
 .env
