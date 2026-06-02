@@ -1,4 +1,10 @@
 # Deepvac
+
+# Features
+- Deepvac AI Advisor
+- Feature 2
+- Feature 3
+
 Main repository for Deepvac AI Advisor
 
 - **bo/** - Initial tests for using Bayesian Optimization
