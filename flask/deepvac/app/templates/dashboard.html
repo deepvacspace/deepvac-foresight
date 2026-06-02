@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DeepVac Dashboard</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v=20260521g">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v=20260602f">
 </head>
 <body>
   <div class="shell">
@@ -12,16 +12,13 @@
       <div class="brand">
         <span>DeepVac</span>
       </div>
+      <button id="sidebarToggle" class="icon-button" aria-label="Show sidebar" title="Show sidebar" type="button"><span aria-hidden="true">&#9776;</span></button>
       <nav class="tool-tabs" aria-label="Dashboard tools">
         <button id="runsToolTab" class="tool-tab active" type="button" data-tool="runs">Runs</button>
         <button id="simToolTab" class="tool-tab" type="button" data-tool="simulator">GRU Simulator</button>
       </nav>
       <div class="top-actions">
-        <label class="search">
-          <span>Search</span>
-          <input id="runSearch" type="search" placeholder="run id">
-        </label>
-        <button id="refreshRuns" class="refresh-button" title="Refresh runs" type="button">Refresh</button>
+        <button id="refreshRuns" class="icon-button" aria-label="Refresh runs" title="Refresh runs" type="button"><span aria-hidden="true">&#8635;</span></button>
         <button id="themeToggle" class="theme-toggle" aria-label="Toggle light and dark mode" title="Switch to light mode" type="button">
           <span class="theme-icon" aria-hidden="true">◐</span>
         </button>
@@ -34,6 +31,10 @@
           <p class="eyebrow">Data Source</p>
           <strong id="dataRoot">Loading...</strong>
         </div>
+        <label class="search sidebar-search">
+          <span>Search</span>
+          <input id="runSearch" type="search" placeholder="run id">
+        </label>
       </div>
       <div class="run-list" id="runList"></div>
     </aside>
@@ -53,17 +54,29 @@
               <span>Setpoint</span>
               <input id="setpointValue" type="number" step="0.1" value="0" disabled>
             </label>
-            <button id="compareToggle" type="button">Compare Off</button>
+            <button id="resetZoom" type="button">Reset</button>
             <select id="chartMode" title="Chart mode">
               <option value="line">Line</option>
               <option value="scatter">Scatter</option>
             </select>
-            <button id="resetZoom" type="button">Reset</button>
+            <div class="download-menu">
+              <button id="downloadToggle" type="button" aria-haspopup="menu" aria-expanded="false">Download</button>
+              <div id="downloadMenu" class="download-menu-panel" role="menu">
+                <button id="exportChart" type="button" role="menuitem">Chart PNG</button>
+                <button id="exportRunCsv" type="button" role="menuitem">Run CSV</button>
+                <button id="exportCompareCsv" type="button" role="menuitem">Comparison CSV</button>
+                <button id="openReport" type="button" role="menuitem">Run Report</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="chart-stage">
           <canvas id="mainChart" height="520"></canvas>
           <div class="chart-tooltip" id="mainTooltip"></div>
+          <div class="plot-spinner chart-loading" id="mainSpinner">
+            <div class="spinner-ring"></div>
+            <span>Loading run</span>
+          </div>
         </div>
         <div class="legend" id="legend"></div>
       </section>
@@ -83,15 +96,24 @@
         <div class="panel">
           <div class="panel-head compact">
             <div>
-              <p class="eyebrow">Band Metrics</p>
-              <h2>PID Schedule</h2>
+              <p class="eyebrow">Run Details</p>
+              <h2>Statistics</h2>
             </div>
           </div>
-          <div id="bandMetrics" class="metric-table"></div>
+          <div class="stats-block">
+            <h3>Band Metrics</h3>
+            <div id="bandMetrics" class="metric-table"></div>
+          </div>
+          <div class="stats-block">
+            <h3>Run Summary</h3>
+            <div class="table-wrap">
+              <table id="comparisonTable"></table>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="panel table-panel">
+      <section class="panel table-panel" id="samplePanel">
         <div class="panel-head compact">
           <div>
             <p class="eyebrow">Samples</p>
@@ -156,6 +178,6 @@
       </section>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=20260521i"></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=20260602f"></script>
 </body>
 </html>

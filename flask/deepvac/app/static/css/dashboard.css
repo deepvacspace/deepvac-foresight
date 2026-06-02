@@ -65,8 +65,15 @@ select {
   overflow: hidden;
 }
 
+body.sidebar-collapsed .shell {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
 .topbar {
   grid-column: 1 / -1;
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -98,6 +105,47 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.toolbar {
+  max-width: 100%;
+}
+
+.download-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.download-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 8;
+  display: none;
+  min-width: 168px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, .34);
+}
+
+.download-menu-panel.open {
+  display: grid;
+  gap: 4px;
+}
+
+.download-menu-panel button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+}
+
+.download-menu-panel button:hover {
+  background: var(--panel-2);
+  border-color: var(--line);
 }
 
 .tool-tabs {
@@ -152,9 +200,14 @@ input:focus {
   outline: none;
 }
 
-.refresh-button {
-  min-width: 74px;
-  padding: 0 12px;
+.icon-button {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  font-size: 17px;
+  line-height: 1;
 }
 
 .setpoint-control {
@@ -203,6 +256,10 @@ input:focus {
   flex-direction: column;
 }
 
+body.sidebar-collapsed .sidebar {
+  display: none;
+}
+
 .sidebar-head {
   padding: 14px;
   border-bottom: 1px solid var(--line);
@@ -213,6 +270,16 @@ input:focus {
   color: var(--muted);
   font-size: 12px;
   word-break: break-all;
+}
+
+.sidebar-search {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.sidebar-search input {
+  width: 100%;
 }
 
 .run-list {
@@ -387,6 +454,12 @@ h2 {
   height: 520px;
   display: block;
   background: var(--chart-bg);
+  cursor: grab;
+  touch-action: none;
+}
+
+.chart-stage canvas.panning {
+  cursor: grabbing;
 }
 
 .chart-tooltip {
@@ -439,6 +512,17 @@ h2 {
   border-top-color: var(--blue);
   border-radius: 50%;
   animation: spin .8s linear infinite;
+}
+
+.chart-loading .spinner-ring {
+  width: 72px;
+  height: 72px;
+  border-width: 5px;
+}
+
+.chart-loading span {
+  font-size: 14px;
+  font-weight: 700;
 }
 
 @keyframes spin {
@@ -531,6 +615,22 @@ h2 {
   overflow: auto;
 }
 
+.stats-block {
+  padding: 12px 14px 14px;
+}
+
+.stats-block + .stats-block {
+  border-top: 1px solid var(--line-soft);
+}
+
+.stats-block h3 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .metric-table table,
 #sampleTable {
   width: 100%;
@@ -578,6 +678,13 @@ td {
     padding: 10px;
   }
 
+  .top-actions,
+  .tool-tabs {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
   .sidebar {
     grid-column: 1;
     grid-row: 2;
@@ -595,5 +702,31 @@ td {
   .lower-grid,
   .sim-form {
     grid-template-columns: 1fr;
+  }
+
+  .panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .toolbar {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding-bottom: 4px;
+  }
+
+  .toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  #mainChart,
+  .chart-stage canvas {
+    height: 360px;
+  }
+
+  .sim-form {
+    gap: 8px;
+    padding: 10px;
   }
 }

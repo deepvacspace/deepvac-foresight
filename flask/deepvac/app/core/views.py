@@ -1,4 +1,5 @@
 import csv
+import html
 import math
 import os
 import sys
@@ -77,6 +78,14 @@ def _to_float(value):
     if math.isnan(number) or math.isinf(number):
         return None
     return number
+
+
+def _first_float(mapping, names):
+    for name in names:
+        value = _to_float(mapping.get(name))
+        if value is not None:
+            return value
+    return None
 
 
 def _format_ts(value):
@@ -159,9 +168,95 @@ def _run_record(samples_path):
         "mae": _to_float(summary.get("mae")),
         "cost": _to_float(summary.get("cost")),
         "tail_mae": _to_float(summary.get("tail_mae")),
+        "overshoot": _first_float(summary, ["overshoot", "overshoot_max", "max_overshoot"]),
+        "settle_time_s": _first_float(summary, ["settle_time_s", "time_to_settle_s", "settling_time_s"]),
         "start_time": _format_ts(start_ts),
         "end_time": _format_ts(end_ts),
     }
+
+
+def _elapsed_x(rows):
+    timestamps = [_to_float(row.get("timestamp")) for row in rows]
+    first_timestamp = next((value for value in timestamps if value is not None), None)
+    values = []
+    for index, timestamp in enumerate(timestamps):
+        if timestamp is not None and first_timestamp is not None:
+            values.append(timestamp - first_timestamp)
+        else:
+            values.append(float(index))
+    return values
+
+
+def _run_annotations(samples, summary, bands):
+    if not samples:
+        return []
+
+    elapsed = _elapsed_x(samples)
+    sample_timestamps = [_to_float(row.get("timestamp")) for row in samples]
+    first_timestamp = next((value for value in sample_timestamps if value is not None), None)
+    temp_values = [_to_float(row.get("temp")) for row in samples]
+    ref_values = [_to_float(row.get("temp_ref")) for row in samples]
+    target = next((value for value in ref_values if value is not None), None)
+    start_temp = next((value for value in temp_values if value is not None), None)
+    annotations = []
+
+    if start_temp is not None:
+        annotations.append({"type": "point", "kind": "start", "x": elapsed[0], "y": start_temp, "label": "Start temp"})
+
+    if target is not None:
+        annotations.append({"type": "line-y", "kind": "target", "y": target, "label": "Target"})
+
+    if target is not None:
+        valid_pairs = [(x_value, temp) for x_value, temp in zip(elapsed, temp_values) if temp is not None]
+        if valid_pairs:
+            direction = 1.0 if start_temp is not None and start_temp > target else -1.0
+            if direction > 0:
+                overshoot_pair = min(valid_pairs, key=lambda pair: pair[1] - target)
+                overshoot_value = max(0.0, target - overshoot_pair[1])
+            else:
+                overshoot_pair = max(valid_pairs, key=lambda pair: pair[1] - target)
+                overshoot_value = max(0.0, overshoot_pair[1] - target)
+            if overshoot_value > 0:
+                annotations.append({
+                    "type": "point",
+                    "kind": "overshoot",
+                    "x": overshoot_pair[0],
+                    "y": overshoot_pair[1],
+                    "label": f"Max overshoot {overshoot_value:g}",
+                })
+
+    settle_time = _first_float(summary, ["settle_time_s", "time_to_settle_s", "settling_time_s"])
+    duration = _first_float(summary, ["duration_s"])
+    if settle_time is not None:
+        annotations.append({
+            "type": "region-x",
+            "kind": "settling",
+            "x0": settle_time,
+            "x1": duration if duration is not None and duration > settle_time else max(elapsed),
+            "label": "Settling region",
+        })
+
+    for row in bands:
+        change_x = _first_float(row, ["timestamp", "elapsed_s", "start_s", "tail_start_s", "time_s"])
+        if change_x is not None:
+            if first_timestamp is not None and change_x >= first_timestamp:
+                change_x -= first_timestamp
+            annotations.append({"type": "line-x", "kind": "pid", "x": change_x, "label": "PID change"})
+
+    invalid_start = None
+    for index, row in enumerate(samples):
+        flag = str(row.get("valid", row.get("is_valid", ""))).strip().lower()
+        failed = str(row.get("failed", row.get("status", ""))).strip().lower()
+        invalid = flag in {"0", "false", "no"} or failed in {"1", "true", "failed", "invalid"}
+        if invalid and invalid_start is None:
+            invalid_start = elapsed[index]
+        elif not invalid and invalid_start is not None:
+            annotations.append({"type": "region-x", "kind": "invalid", "x0": invalid_start, "x1": elapsed[index], "label": "Invalid region"})
+            invalid_start = None
+    if invalid_start is not None:
+        annotations.append({"type": "region-x", "kind": "invalid", "x0": invalid_start, "x1": elapsed[-1], "label": "Invalid region"})
+
+    return annotations
 
 
 def _downsample(rows, max_points=MAX_SERIES_POINTS):
@@ -255,6 +350,7 @@ def run_detail(run_id):
         "run": _run_record(run_dir / SAMPLES_FILE),
         "summary": summary,
         "bands": bands,
+        "annotations": _run_annotations(samples, summary, bands),
         "columns": list(samples[0].keys()) if samples else [],
         "numeric_columns": numeric_columns,
     })
@@ -295,6 +391,68 @@ def run_table(run_id):
         "columns": list(samples[0].keys()) if samples else [],
         "rows": samples,
     })
+
+
+@core.route("/dashboard-api/runs/<path:run_id>/report")
+def run_report(run_id):
+    run_dir = _run_dir(run_id)
+    samples = _read_samples(run_dir)
+    summary = _read_summary(run_dir)
+    bands = _csv_dicts(run_dir / BAND_METRICS_FILE)
+    record = _run_record(run_dir / SAMPLES_FILE)
+    summary_rows = "".join(
+        f"<tr><th>{html.escape(str(key))}</th><td>{html.escape(str(value))}</td></tr>"
+        for key, value in summary.items()
+    )
+    band_columns = list(bands[0].keys()) if bands else []
+    band_head = "".join(f"<th>{html.escape(column)}</th>" for column in band_columns)
+    band_body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(row.get(column, '')))}</td>" for column in band_columns) + "</tr>"
+        for row in bands
+    )
+    metric = lambda name: "-" if record.get(name) is None else record.get(name)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepVac Run Report - {html.escape(record["id"])}</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 32px; color: #172033; }}
+    header {{ display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid #ccd5e1; padding-bottom: 16px; }}
+    h1 {{ margin: 0 0 8px; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 13px; }}
+    th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }}
+    th {{ background: #f1f5f9; }}
+    .metrics {{ display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; margin: 18px 0; }}
+    .metric {{ border: 1px solid #dbe2ea; border-radius: 8px; padding: 12px; }}
+    .metric span {{ display: block; color: #64748b; font-size: 11px; text-transform: uppercase; }}
+    .metric strong {{ display: block; margin-top: 5px; font-size: 20px; }}
+    @media print {{ button {{ display: none; }} body {{ margin: 18mm; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>{html.escape(record["id"])}</h1>
+      <div>{html.escape(record["group"])}</div>
+    </div>
+    <button onclick="window.print()">Print / Save PDF</button>
+  </header>
+  <section class="metrics">
+    <div class="metric"><span>Cost</span><strong>{html.escape(str(metric("cost")))}</strong></div>
+    <div class="metric"><span>MAE</span><strong>{html.escape(str(metric("mae")))}</strong></div>
+    <div class="metric"><span>Tail MAE</span><strong>{html.escape(str(metric("tail_mae")))}</strong></div>
+    <div class="metric"><span>Overshoot</span><strong>{html.escape(str(metric("overshoot")))}</strong></div>
+    <div class="metric"><span>Settle Time</span><strong>{html.escape(str(metric("settle_time_s")))} s</strong></div>
+  </section>
+  <h2>Summary</h2>
+  <table><tbody>{summary_rows}</tbody></table>
+  <h2>PID Schedule</h2>
+  <table><thead><tr>{band_head}</tr></thead><tbody>{band_body}</tbody></table>
+  <p>{len(samples)} samples available in run data CSV.</p>
+</body>
+</html>"""
 
 
 @core.route("/dashboard-api/simulate", methods=["POST"])
