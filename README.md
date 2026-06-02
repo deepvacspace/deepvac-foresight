@@ -7,7 +7,7 @@ Short explanation of what this project does.
 - Feature 2
 - Feature 3
 
-Main repository for Deepvac AI Advisor
+## Main repository for Deepvac AI Advisor
 
 - **bo/** - Initial tests for using Bayesian Optimization
 - **bo_common.py** - Utility functions for Bayesian Optimization (still actively used)
