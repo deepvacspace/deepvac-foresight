@@ -2,7 +2,7 @@
 ## Overview
 Short explanation of what this project does.
 
-# Features
+## Features
 - Deepvac AI Advisor
 - Feature 2
 - Feature 3
