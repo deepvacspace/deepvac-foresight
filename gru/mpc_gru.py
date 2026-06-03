@@ -139,7 +139,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--pid-period-s", type=float, default=0.1)
 
     # MPC settings.
-    ap.add_argument("--mpc-horizon-s", type=float, default=60.0,
+    ap.add_argument("--mpc-horizon-s", type=float, default=80.0,
                     help="Future horizon optimized at every MPC decision.")
     ap.add_argument("--mpc-hold-s", type=float, default=20.0,
                     help="How long to apply selected PID before replanning.")
@@ -171,13 +171,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--history-velocity-scale", type=float, default=0.2)
 
     # Cost weights for MPC horizon.
-    ap.add_argument("--w-overshoot-max", type=float, default=100.0)
-    ap.add_argument("--w-overshoot-rmse", type=float, default=30.0)
-    ap.add_argument("--w-abs-error", type=float, default=0.2)
-    ap.add_argument("--w-final-abs-error", type=float, default=0.5)
-    ap.add_argument("--w-near-std", type=float, default=2.0)
-    ap.add_argument("--w-control-change", type=float, default=0.01,
-                    help="Penalty for changing PID coefficients. Helps avoid noisy schedules.")
+    ap.add_argument("--w-overshoot-max", type=float, default=80.0)
+    ap.add_argument("--w-abs-error", type=float, default=2.0)
+    ap.add_argument("--w-motion", type=float, default=20.0)
+    ap.add_argument("--motion-error-scale", type=float, default=5.0,
+                    help=(
+                        "Larger values make the controller start braking earlier."
+                    ))
+    ap.add_argument("--w-near-std", type=float, default=1.0)
     ap.add_argument("--w-invalid", type=float, default=1_000_000.0)
 
     # Final run metrics.
@@ -638,58 +639,75 @@ def inject_seed_candidates(
     return n
 
 
-def normalized_pid_distance(a: np.ndarray, b: np.ndarray, args: argparse.Namespace) -> float:
-    lo, hi = pid_bounds(args)
-    denom = np.maximum(hi - lo, 1e-9)
-    z = (np.asarray(a, dtype=float) - np.asarray(b, dtype=float)) / denom
-    return float(np.sqrt(np.mean(np.square(z))))
-
-
 def overshoot_array(temps: np.ndarray, *, start_temp: float, target_temp: float) -> np.ndarray:
     if target_temp <= start_temp:
         return np.maximum(target_temp - temps, 0.0)  # cooling: below target
     return np.maximum(temps - target_temp, 0.0)      # heating: above target
 
-
 def horizon_cost(
     *,
     temps: np.ndarray,
-    candidate_pid: np.ndarray,
-    previous_pid: np.ndarray,
     start_temp: float,
     target_temp: float,
     valid: bool,
     args: argparse.Namespace,
 ) -> Dict[str, float]:
     temps = np.asarray(temps, dtype=float)
-    error = target_temp - temps
-    abs_error = np.abs(error)
-    overshoot = overshoot_array(
-        temps, start_temp=start_temp, target_temp=target_temp)
 
     if temps.size == 0:
-        return {"cost": float(args.w_invalid), "valid": False}
+        return {
+            "cost": float(args.w_invalid),
+            "valid": False,
+            "horizon_mae": float("nan"),
+            "horizon_near_std": float("nan"),
+            "horizon_overshoot_max": float("nan"),
+            "horizon_weighted_motion": float("nan"),
+            "horizon_mean_abs_velocity": float("nan"),
+        }
 
+    error = float(target_temp) - temps
+    abs_error = np.abs(error)
+
+    overshoot = overshoot_array(
+        temps,
+        start_temp=float(start_temp),
+        target_temp=float(target_temp),
+    )
+
+    overshoot_max = float(np.max(overshoot))
+    mae = float(np.mean(abs_error))
+
+    # Optional stability term, only inside the near band.
     near_mask = abs_error <= float(args.near_band)
     if np.any(near_mask):
         near_std = float(np.std(temps[near_mask]))
     else:
         near_std = 0.0
 
-    overshoot_max = float(np.max(overshoot))
-    overshoot_rmse = float(np.sqrt(np.mean(np.square(overshoot))))
-    mae = float(np.mean(abs_error))
-    final_abs_error = float(abs_error[-1])
-    change_penalty = normalized_pid_distance(candidate_pid, previous_pid, args)
+    if temps.size >= 2:
+        dt = max(float(args.dt_s), 1e-9)
+
+        temp_velocity = np.diff(temps) / dt
+        err_for_velocity = abs_error[:-1]
+
+        motion_error_scale = max(float(args.motion_error_scale), 1e-9)
+        closeness_weight = np.exp(-err_for_velocity / motion_error_scale)
+
+        weighted_motion = float(
+            np.mean(closeness_weight * np.square(temp_velocity))
+        )
+        mean_abs_velocity = float(np.mean(np.abs(temp_velocity)))
+    else:
+        weighted_motion = 0.0
+        mean_abs_velocity = 0.0
 
     cost = (
         float(args.w_overshoot_max) * overshoot_max
-        + float(args.w_overshoot_rmse) * overshoot_rmse
         + float(args.w_abs_error) * mae
-        + float(args.w_final_abs_error) * final_abs_error
+        + float(args.w_motion) * weighted_motion
         + float(args.w_near_std) * near_std
-        + float(args.w_control_change) * change_penalty
     )
+
     if not valid:
         cost += float(args.w_invalid)
 
@@ -697,13 +715,11 @@ def horizon_cost(
         "cost": float(cost),
         "valid": bool(valid),
         "horizon_mae": mae,
-        "horizon_final_abs_error": final_abs_error,
         "horizon_near_std": near_std,
         "horizon_overshoot_max": overshoot_max,
-        "horizon_overshoot_rmse": overshoot_rmse,
-        "pid_change_norm": change_penalty,
+        "horizon_weighted_motion": weighted_motion,
+        "horizon_mean_abs_velocity": mean_abs_velocity,
     }
-
 
 def rollout_constant_pid(
     *,
@@ -742,12 +758,8 @@ def rollout_constant_pid(
         if not step_valid:
             break
 
-    previous_pid = np.asarray(
-        [initial_state.kp, initial_state.ki, initial_state.kd], dtype=float)
     metrics = horizon_cost(
         temps=np.asarray(temps, dtype=float),
-        candidate_pid=pid_vec,
-        previous_pid=previous_pid,
         start_temp=float(args.start_temp),
         target_temp=float(args.target_temp),
         valid=valid,
@@ -1120,11 +1132,10 @@ def run_mpc_simulation(
             "mpc_cost": float(decision["cost"]),
             "current_pid_cost": float(decision["current_cost"]),
             "horizon_overshoot_max": float(decision.get("horizon_overshoot_max", np.nan)),
-            "horizon_overshoot_rmse": float(decision.get("horizon_overshoot_rmse", np.nan)),
             "horizon_mae": float(decision.get("horizon_mae", np.nan)),
-            "horizon_final_abs_error": float(decision.get("horizon_final_abs_error", np.nan)),
+            "horizon_weighted_motion": float(decision.get("horizon_weighted_motion", np.nan)),
+            "horizon_mean_abs_velocity": float(decision.get("horizon_mean_abs_velocity", np.nan)),
             "horizon_near_std": float(decision.get("horizon_near_std", np.nan)),
-            "pid_change_norm": float(decision.get("pid_change_norm", np.nan)),
             "n_evaluated": int(decision["n_evaluated"]),
             "n_history_candidates": int(decision.get("n_history_candidates", 0)),
             "horizon_steps": int(decision["horizon_steps"]),
@@ -1139,6 +1150,8 @@ def run_mpc_simulation(
                 f"pid=({state.kp:7.3f}, {state.ki:8.3f}, {state.kd:7.3f}) "
                 f"cost={float(decision['cost']):9.4f} "
                 f"os={float(decision.get('horizon_overshoot_max', 0.0)):7.4f} "
+                f"mae={float(decision.get('horizon_mae', 0.0)):7.4f} "
+                f"motion={float(decision.get('horizon_weighted_motion', 0.0)):9.6f} "
                 f"eval={int(decision['n_evaluated'])} time={optimize_ms:7.1f}ms"
             )
 
@@ -1284,11 +1297,10 @@ def main() -> None:
         },
         "cost_weights": {
             "overshoot_max": float(args.w_overshoot_max),
-            "overshoot_rmse": float(args.w_overshoot_rmse),
             "abs_error": float(args.w_abs_error),
-            "final_abs_error": float(args.w_final_abs_error),
+            "motion": float(args.w_motion),
+            "motion_error_scale": float(args.motion_error_scale),
             "near_std": float(args.w_near_std),
-            "control_change": float(args.w_control_change),
         },
         "metrics": metrics,
         "trajectory_csv": str(trajectory_csv) if bool(args.save_trajectory) else None,

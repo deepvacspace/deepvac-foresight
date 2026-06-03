@@ -1,0 +1,309 @@
+{
+  "suggested_controller": {
+    "far": {
+      "kp": 2.146277652023925,
+      "ki": 995.4512278125437,
+      "kd": 1.037508939726977
+    },
+    "mid": {
+      "kp": 19.999316522976624,
+      "ki": 596.9896744161978,
+      "kd": 49.6909683228932
+    },
+    "near": {
+      "kp": 5.550423864083178,
+      "ki": 122.79898806781219,
+      "kd": 1.6722383013145645
+    }
+  },
+  "band_predictions": {
+    "far": {
+      "pred_cost": 20.208078700722115,
+      "pred_std": 1.2222676730513382,
+      "start_temp": 25.99484729766846,
+      "target_temp": 0.0,
+      "expected_improvement": null,
+      "lcb_score": 19.841398398806714,
+      "expected_information_gain": null,
+      "source": "gp_lower_confidence_bound",
+      "top_candidates": [
+        {
+          "rank": 1,
+          "kp": 2.146277652023925,
+          "ki": 995.4512278125437,
+          "kd": 1.037508939726977,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": 20.208078700722115,
+          "pred_std": 1.2222676730513382,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": 19.841398398806714
+        },
+        {
+          "rank": 2,
+          "kp": 2.1357744934048783,
+          "ki": 979.2298088222975,
+          "kd": 1.0043500699499786,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": 20.209939650248696,
+          "pred_std": 1.2236083769092467,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": 19.842857137175923
+        },
+        {
+          "rank": 3,
+          "kp": 2.135088761120332,
+          "ki": 999.5031812238917,
+          "kd": 1.1392267514555887,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": 20.209943916514735,
+          "pred_std": 1.2233870051585762,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": 19.84292781496716
+        }
+      ],
+      "n_training_samples": 172,
+      "best_observed_cost": 10.496093269376193,
+      "best_observed_triplet": {
+        "kp": 7.0,
+        "ki": 966.0,
+        "kd": 1.0,
+        "start_temp": 11.798316955566406,
+        "target_temp": 0.0
+      }
+    },
+    "mid": {
+      "pred_cost": 2.4142604807574455,
+      "pred_std": 0.16130243643498443,
+      "start_temp": 25.99484729766846,
+      "target_temp": 0.0,
+      "expected_improvement": null,
+      "lcb_score": 2.3658697498269503,
+      "expected_information_gain": null,
+      "source": "gp_lower_confidence_bound",
+      "top_candidates": [
+        {
+          "rank": 1,
+          "kp": 19.999316522976624,
+          "ki": 596.9896744161978,
+          "kd": 49.6909683228932,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": 2.4142604807574455,
+          "pred_std": 0.16130243643498443,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": 2.3658697498269503
+        },
+        {
+          "rank": 2,
+          "kp": 19.955658067983332,
+          "ki": 606.1858138695858,
+          "kd": 45.70660922173598,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": 2.41577938716066,
+          "pred_std": 0.14826717641390275,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": 2.3712992342364894
+        },
+        {
+          "rank": 3,
+          "kp": 19.87519887926123,
+          "ki": 607.5314199060341,
+          "kd": 48.07120891133819,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": 2.4175232070455075,
+          "pred_std": 0.15283648863567367,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": 2.3716722604548055
+        }
+      ],
+      "n_training_samples": 171,
+      "best_observed_cost": 2.4190438888711294,
+      "best_observed_triplet": {
+        "kp": 20.0,
+        "ki": 453.0,
+        "kd": 49.0,
+        "start_temp": 25.861433029174805,
+        "target_temp": 0.0
+      }
+    },
+    "near": {
+      "pred_cost": -0.5358169018924257,
+      "pred_std": 1.1539081158555156,
+      "start_temp": 25.99484729766846,
+      "target_temp": 0.0,
+      "expected_improvement": null,
+      "lcb_score": -0.8819893366490803,
+      "expected_information_gain": null,
+      "source": "gp_lower_confidence_bound",
+      "top_candidates": [
+        {
+          "rank": 1,
+          "kp": 5.550423864083178,
+          "ki": 122.79898806781219,
+          "kd": 1.6722383013145645,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": -0.5358169018924257,
+          "pred_std": 1.1539081158555156,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": -0.8819893366490803
+        },
+        {
+          "rank": 2,
+          "kp": 5.5485312549452885,
+          "ki": 125.51677746840213,
+          "kd": 1.227261859902439,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": -0.5269270541856486,
+          "pred_std": 1.1716860989539346,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": -0.8784328838718289
+        },
+        {
+          "rank": 3,
+          "kp": 5.052805193860892,
+          "ki": 114.2937973016673,
+          "kd": 1.7590538913596168,
+          "start_temp": 25.99484729766846,
+          "target_temp": 0.0,
+          "pred_cost": -0.5193876640427884,
+          "pred_std": 1.1079961021461997,
+          "source": "gp_lower_confidence_bound",
+          "acquisition": "lcb",
+          "lcb_score": -0.8517864946866482
+        }
+      ],
+      "n_training_samples": 172,
+      "best_observed_cost": 0.33513391618408156,
+      "best_observed_triplet": {
+        "kp": 16.0,
+        "ki": 105.0,
+        "kd": 56.0,
+        "start_temp": 27.151344299316406,
+        "target_temp": 0.0
+      }
+    }
+  },
+  "candidate_combinations": [
+    "PID_SCHEDULES = [",
+    "    (2, 995, 1, 20, 597, 50, 6, 123, 2),",
+    "    (2, 995, 1, 20, 597, 50, 6, 126, 1),",
+    "    (2, 995, 1, 20, 597, 50, 5, 114, 2),",
+    "    (2, 995, 1, 20, 606, 46, 6, 123, 2),",
+    "    (2, 995, 1, 20, 606, 46, 6, 126, 1),",
+    "    (2, 995, 1, 20, 606, 46, 5, 114, 2),",
+    "    (2, 995, 1, 20, 608, 48, 6, 123, 2),",
+    "    (2, 995, 1, 20, 608, 48, 6, 126, 1),",
+    "    (2, 995, 1, 20, 608, 48, 5, 114, 2),",
+    "]"
+  ],
+  "suggestion_context": {
+    "start_temp": 25.99484729766846,
+    "target_temp": 0.0,
+    "source": {
+      "start_temp": "median_training_start_temp",
+      "target_temp": "median_training_target_temp"
+    }
+  },
+  "meta": {
+    "generated_at": 1780126075,
+    "history_root": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\optimization\\run_history",
+    "acquisition": "lcb",
+    "far_threshold": 10.0,
+    "near_threshold": 3.0,
+    "min_band_samples": 8,
+    "feature_columns": [
+      "kp",
+      "ki",
+      "kd",
+      "start_temp",
+      "target_temp"
+    ],
+    "far_mae_weight": 0.5,
+    "far_time_weight": 0.03,
+    "mid_mae_weight": 0.5,
+    "mid_slope_weight": 10.0,
+    "near_tail_mae_weight": 3.0,
+    "near_jitter_weight": 5.0,
+    "near_overshoot_weight": 5.0,
+    "xi": 0.01,
+    "lcb_kappa": 0.3,
+    "n_candidates": 100000,
+    "top_k": 3,
+    "combination_export_top_by_band": {
+      "far": 1,
+      "mid": 3,
+      "near": 3
+    },
+    "training_run_prefix_counts": {
+      "run": 480,
+      "val": 30,
+      "mpc": 6
+    },
+    "bounds": {
+      "far": {
+        "kp": [
+          1.0,
+          20.0
+        ],
+        "ki": [
+          1.0,
+          1000.0
+        ],
+        "kd": [
+          1.0,
+          50.0
+        ]
+      },
+      "mid": {
+        "kp": [
+          1.0,
+          20.0
+        ],
+        "ki": [
+          1.0,
+          1000.0
+        ],
+        "kd": [
+          1.0,
+          50.0
+        ]
+      },
+      "near": {
+        "kp": [
+          1.0,
+          20.0
+        ],
+        "ki": [
+          1.0,
+          1000.0
+        ],
+        "kd": [
+          1.0,
+          50.0
+        ]
+      }
+    },
+    "outputs": {
+      "models": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\optimization\\output\\band_gp_models.pkl",
+      "next_params": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\optimization\\output\\band_bo_next_params.json",
+      "candidate_combinations": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\optimization\\output\\band_bo_candidate_combinations.txt",
+      "snapshot": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\optimization\\output\\band_bo_suggestions\\band_bo_next_params_1780126075.json",
+      "candidate_combinations_snapshot": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\optimization\\output\\band_bo_suggestions\\band_bo_candidate_combinations_1780126075.txt"
+    }
+  }
+}
