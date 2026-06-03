@@ -1,8 +1,14 @@
 # Deepvac
-Main repository for Deepvac AI Advisor
+## Overview
+Short explanation of what this project does.
 
-- **bo/** - Initial tests for using Bayesian Optimization
-- **bo_common.py** - Utility functions for Bayesian Optimization (still actively used)
+## Features
+- Deepvac AI Advisor
+- Feature 2
+- Feature 3
+
+## Main repository for Deepvac AI Advisor
+
 - **gru/** - GRU model for digital twin that predicts chamber temperature
 - **lstm/** - LSTM model for digital twin that predicts chamber temperature
 - **opc/** - Utilities for OPC connection and data transfer
@@ -10,3 +16,4 @@ Main repository for Deepvac AI Advisor
 - **tcp/** - Utilities and code for TCP connection and data transfer
 - **flask/** - Code for data visualization dashboard
 - **utils/** - General utility functions
+- **utils/bo_common.py** - Utility functions for Bayesian Optimization
