@@ -1,0 +1,78 @@
+{
+  "run_id": "mpc_20260603_172710_e82f8d13",
+  "checkpoint": "validation_t1\\gru_t1.pt",
+  "feature_names": [
+    "temp",
+    "temp_ref",
+    "error",
+    "temp_u",
+    "temp_u_p",
+    "temp_u_i",
+    "temp_u_d",
+    "kp",
+    "ki",
+    "kd"
+  ],
+  "window_steps": 60,
+  "scenario": {
+    "start_temp": 27.0,
+    "target_temp": 0.0,
+    "duration_s": 1200.0,
+    "dt_s": 2.0,
+    "precondition_ref": 27.0
+  },
+  "mpc": {
+    "optimizer": "cem",
+    "horizon_s": 80.0,
+    "hold_s": 20.0,
+    "population": 256,
+    "iterations": 3,
+    "elite_frac": 0.12,
+    "apply_margin": 0.0,
+    "candidate_table": "C:\\Users\\user\\Desktop\\deepvac\\deepvac\\gru\\mpc_pid_runs\\mpc_candidate_table.csv",
+    "candidate_table_rows": 4762,
+    "history_candidates": 24,
+    "history_neighbor_pool": 250
+  },
+  "bounds": {
+    "kp": [
+      1.0,
+      50.0
+    ],
+    "ki": [
+      1.0,
+      1000.0
+    ],
+    "kd": [
+      1.0,
+      20.0
+    ]
+  },
+  "cost_weights": {
+    "overshoot_max": 80.0,
+    "abs_error": 2.0,
+    "motion": 20.0,
+    "motion_error_scale": 10.0,
+    "near_std": 1.0
+  },
+  "metrics": {
+    "valid": true,
+    "invalid_reason": "",
+    "mae_full": 3.6419123639662727,
+    "tail_mae": 0.0025747250141805295,
+    "tail_bias": -0.0025747250141805295,
+    "tail_std": 0.002310517413020188,
+    "overshoot_max": 0.3693874813616276,
+    "overshoot_rmse": 0.03698295734939105,
+    "final_error": -0.0004356120834927424,
+    "final_abs_error": 0.0004356120834927424,
+    "end_temp": 0.0004356120834927424,
+    "min_temp": -0.3693874813616276,
+    "max_temp": 26.843181133270264,
+    "time_to_near_s": 278.0,
+    "time_to_settle_s": 300.0,
+    "pid_changes": 47
+  },
+  "trajectory_csv": "mpc_pid_runs_batch\\mpc_20260603_172710_e82f8d13\\mpc_trajectory.csv",
+  "decisions_csv": "mpc_pid_runs_batch\\mpc_20260603_172710_e82f8d13\\mpc_decisions.csv"
+}

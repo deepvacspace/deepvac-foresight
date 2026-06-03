@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
 	sys.path.insert(0, str(ROOT))
 
-from bo.bo_common import (  
+from utils.bo_common import (  
 	append_mae_column,
 	append_rows_csv,
 	compute_tail_cost,
@@ -37,7 +37,7 @@ PIDTriplet = Tuple[int, int, int]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-	default_decisions = ROOT / "gru" / "mpc_pid_runs" / "mpc_20260524_114944_11becb8b" / "mpc_decisions.csv"
+	default_decisions = ROOT / "gru" / "mpc_pid_runs" / "mpc_20260603_162052_acd5dfb1" / "mpc_decisions.csv"
 	output_dir = Path(__file__).with_name("output")
 
 	ap = argparse.ArgumentParser(

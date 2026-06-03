@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
 """
 Batch runner for gru_mpc_continuous.py.
-
-This script runs multiple MPC prediction experiments with the SAME
-start temperature and target temperature, while varying only controller
-configuration and cost-function settings.
-
-Outputs:
-    mpc_pid_runs_batch/
-        mpc_xxxxx/
-            mpc_trajectory.csv
-            mpc_decisions.csv
-            mpc_summary.json
-        ...
-        batch_comparison.csv
-
-Example:
-
-    python batch_mpc_runs.py ^
-        --script gru_mpc_continuous.py ^
-        --checkpoint scripts/gru/validation_t1/gru_t1.pt ^
-        --output-dir mpc_pid_runs_batch
 """
 
 from __future__ import annotations
@@ -52,7 +32,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--checkpoint",
-        required=True,
         default="./validation_t1/gru_t1.pt",
         help="Path to the trained GRU checkpoint.",
     )
