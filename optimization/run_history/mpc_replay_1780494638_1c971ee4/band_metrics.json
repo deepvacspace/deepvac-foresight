@@ -1,0 +1,48 @@
+{
+  "run_id": "mpc_replay_1780494638_1c971ee4",
+  "records": [
+    {
+      "run_id": "mpc_replay_1780494638_1c971ee4",
+      "band": "far",
+      "kp": 40.0,
+      "ki": 935.0,
+      "kd": 1.0,
+      "cost": 18.747208028805407,
+      "n_samples": 158,
+      "start_temp": 24.172046661376957,
+      "target_temp": 0.0,
+      "duration_s": 1247.997009754181,
+      "far_mae": 18.534708940530127,
+      "time_to_reach_mid_band": 315.9951186180115
+    },
+    {
+      "run_id": "mpc_replay_1780494638_1c971ee4",
+      "band": "mid",
+      "kp": 1.0,
+      "ki": 1.0,
+      "kd": 19.0,
+      "cost": 3.767715371597596,
+      "n_samples": 57,
+      "start_temp": 24.172046661376957,
+      "target_temp": 0.0,
+      "duration_s": 1247.997009754181,
+      "mid_mae": 6.4055349199395435,
+      "approach_speed": 0.05649479116278246
+    },
+    {
+      "run_id": "mpc_replay_1780494638_1c971ee4",
+      "band": "near",
+      "kp": 1.0,
+      "ki": 897.0,
+      "kd": 2.0,
+      "cost": 2.5703679483990993,
+      "n_samples": 410,
+      "start_temp": 24.172046661376957,
+      "target_temp": 0.0,
+      "duration_s": 1247.997009754181,
+      "tail_mae": 0.29298752033157854,
+      "jitter_std": 0.2166640372626093,
+      "overshoot": 0.12161704021826346
+    }
+  ]
+}

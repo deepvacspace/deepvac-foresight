@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
 	sys.path.insert(0, str(ROOT))
 
-from bo.bo_common import (
+from utils.bo_common import (
 	append_mae_column,
 	append_rows_csv,
 	compute_tail_cost,
@@ -39,15 +39,14 @@ BANDS = ("far", "mid", "near")
 # (far_p, far_i, far_d, mid_p, mid_i, mid_d, near_p, near_i, near_d)
 
 PID_SCHEDULES = [
-    (20, 1000, 46, 20, 455, 26, 20, 150, 1),
-    (20, 1000, 46, 20, 455, 26, 20, 62, 50),
-    (20, 1000, 46, 20, 457, 14, 20, 150, 1),
-    (20, 1000, 46, 20, 457, 14, 20, 62, 50),
-    (6, 1000, 49, 20, 455, 26, 20, 150, 1),
-    (6, 1000, 49, 20, 455, 26, 20, 62, 50),
-    (6, 1000, 49, 20, 457, 14, 20, 150, 1),
-    (6, 1000, 49, 20, 457, 14, 20, 62, 50),
+    (1, 998, 3, 7, 671, 44, 1, 495, 50),
+    (1, 998, 3, 7, 671, 44, 1, 517, 50),
+    (1, 998, 3, 17, 671, 44, 1, 517, 50),
+    (1, 998, 3, 17, 671, 44, 1, 541, 49),
+    (1, 998, 3, 8, 672, 44, 1, 495, 50),
+    (1, 998, 3, 8, 672, 44, 1, 541, 49),
 ]
+
 
 
 
@@ -55,7 +54,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	output_dir = Path(__file__).with_name("output")
 	ap = argparse.ArgumentParser()
 
-	ap.add_argument("--num-tests", type=int, default=8)
+	ap.add_argument("--num-tests", type=int, default=6)
 	ap.add_argument("--forever", action="store_true", help="Run tests continuously")
 	ap.add_argument("--val", action="store_true", help="Save runs with val_* ids for validation.")
 	ap.add_argument("--seed", type=int, default=None)
