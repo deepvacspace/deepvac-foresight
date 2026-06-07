@@ -1,0 +1,14 @@
+artifact_uri: file:///G:/Other%20computers/My%20Laptop%20%281%29/deepvac/scripts/lstm/mlruns/530044140098629170/00d74a31327746d6b45a719db89d56b6/artifacts
+end_time: 1780539267111
+entry_point_name: ''
+experiment_id: '530044140098629170'
+lifecycle_stage: active
+run_id: 00d74a31327746d6b45a719db89d56b6
+run_name: optuna_trial_37
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1780539220818
+status: 4
+tags: []
+user_id: mike_

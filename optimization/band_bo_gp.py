@@ -70,10 +70,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--mid-mae-weight", type=float, default=0.5)
     ap.add_argument("--mid-slope-weight", type=float, default=10.0)
+    ap.add_argument(
+        "--mid-brake-power",
+        type=float,
+        default=2.0,
+        help=(
+            "Progressive braking curve inside the mid band. "
+            "1.0 = linear, 2.0 = quadratic, 3.0 = stronger braking near the near band."
+        ),
+    )
+    ap.add_argument(
+        "--mid-brake-speed-target",
+        type=float,
+        default=0.003,
+        help=(
+            "Allowed abs-error reduction speed in deg/s before mid-band braking penalty starts. "
+            "Lower values make the controller brake earlier/slower."
+        ),
+    )
+    ap.add_argument(
+        "--mid-brake-min-weight",
+        type=float,
+        default=0.10,
+        help=(
+            "Minimum braking weight at the beginning of the mid band. "
+            "Keeps braking active from the far/mid boundary instead of only near the near band."
+        ),
+    )
 
     ap.add_argument("--near-tail-mae-weight", type=float, default=3.0) # 2
     ap.add_argument("--near-jitter-weight", type=float, default=5.0)    # 0
     ap.add_argument("--near-overshoot-weight", type=float, default=5.0) # 10
+    ap.add_argument(
+        "--near-max-overshoot-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "Soft near-band max-overshoot penalty. "
+            "This improves overshoot preference without making crossing a hard constraint."
+        ),
+    )
 
     ap.add_argument("--tail-seconds", type=float, default=300.0)
 
@@ -424,14 +460,29 @@ def compute_far_cost(
 def compute_mid_cost(
     df_mid: pd.DataFrame,
     near_threshold: float,
+    far_threshold: float,
     min_band_samples: int,
     mae_weight: float,
     slope_weight: float,
+    brake_power: float,
+    brake_speed_target: float,
+    brake_min_weight: float,
 ) -> Dict[str, float | int]:
     """
-    objective:
-      - Reduce error
-      - Arrive slow
+    Mid-band objective:
+      - Reduce error.
+      - Start braking immediately from the beginning of the mid band.
+      - Increase braking strength progressively as the trajectory approaches the near band.
+
+    Definitions:
+      error = temp - temp_ref
+      abs_error = abs(error)
+      dabs_error_dt < 0 means abs_error is decreasing, so the trajectory is moving
+      toward the setpoint.
+
+    The braking penalty does not punish every movement toward the target. It only
+    punishes approach speed above brake_speed_target, and it weights that excess
+    speed more strongly close to the near band.
     """
     n = int(len(df_mid))
     enough = n >= min_band_samples
@@ -442,31 +493,46 @@ def compute_mid_cost(
             "cost": float("nan"),
             "mid_mae": float("nan"),
             "approach_speed": float("nan"),
+            "weighted_approach_speed": float("nan"),
+            "brake_penalty": float("nan"),
+            "mean_brake_weight": float("nan"),
         }
 
     mid_mae = safe_mean(df_mid["abs_error"])
 
-    near_edge_limit = near_threshold + 1.0
-    near_edge = df_mid[df_mid["abs_error"] <= near_edge_limit]
+    approach_speed = (-df_mid["dabs_error_dt"]).clip(lower=0.0)
 
-    if len(near_edge):
-        approach_speed = safe_mean(
-            (-near_edge["dabs_error_dt"]).clip(lower=0.0))
-    else:
-        approach_speed = 0.0
+    denom = max(float(far_threshold) - float(near_threshold), 1e-9)
+    progress_to_near = (float(far_threshold) - df_mid["abs_error"]) / denom
+    progress_to_near = progress_to_near.clip(lower=0.0, upper=1.0)
+
+    brake_min_weight = float(np.clip(brake_min_weight, 0.0, 1.0))
+    brake_power = max(float(brake_power), 1e-6)
+    brake_weight = brake_min_weight + (1.0 - brake_min_weight) * np.power(
+        progress_to_near,
+        brake_power,
+    )
+
+    excessive_speed = (approach_speed - float(brake_speed_target)).clip(lower=0.0)
+
+    weighted_approach_speed = safe_mean(brake_weight * approach_speed)
+    brake_penalty = safe_mean(brake_weight * np.square(excessive_speed))
+    mean_brake_weight = safe_mean(brake_weight)
 
     cost = (
         mae_weight * mid_mae
-        + slope_weight * approach_speed
+        + slope_weight * brake_penalty
     )
 
     return {
         "n_samples": n,
         "cost": float(cost) if enough else float("nan"),
         "mid_mae": float(mid_mae),
-        "approach_speed": float(approach_speed),
+        "approach_speed": float(safe_mean(approach_speed)),
+        "weighted_approach_speed": float(weighted_approach_speed),
+        "brake_penalty": float(brake_penalty),
+        "mean_brake_weight": float(mean_brake_weight),
     }
-
 
 def compute_near_cost(
     df_near: pd.DataFrame,
@@ -476,13 +542,20 @@ def compute_near_cost(
     tail_mae_weight: float,
     jitter_weight: float,
     overshoot_weight: float,
+    max_overshoot_weight: float,
 ) -> Dict[str, float | int]:
     """
-    objective:
-      - Reduce MAE to zero
-      - Reduce std (jitter)
-      - Avoid overshoot
+    Near-band objective:
+      - Reduce tail MAE.
+      - Reduce jitter/std.
+      - Improve overshoot only inside the near band.
 
+    Overshoot is still a soft penalty, not a hard constraint. The cost uses:
+      - mean squared overshoot: penalizes sustained crossing.
+      - max overshoot: softly discourages one deep crossing.
+
+    This keeps overshoot relevant without letting it dominate all other near-band
+    objectives.
     """
     n = int(len(df_near))
     enough = n >= min_band_samples
@@ -494,6 +567,8 @@ def compute_near_cost(
             "tail_mae": float("nan"),
             "jitter_std": float("nan"),
             "overshoot": float("nan"),
+            "mean_sq_overshoot": float("nan"),
+            "max_overshoot": float("nan"),
         }
 
     t_last = float(df_near["t_rel"].iloc[-1])
@@ -506,12 +581,18 @@ def compute_near_cost(
     jitter_std = safe_std(tail["error"])
 
     abs_overshoot = overshoot_amount(tail, init_sign)
-    overshoot = safe_mean(np.square(abs_overshoot))
+    mean_sq_overshoot = safe_mean(np.square(abs_overshoot))
+    max_overshoot = float(np.nanmax(abs_overshoot)) if len(abs_overshoot) else 0.0
+
+    overshoot = (
+        overshoot_weight * mean_sq_overshoot
+        + max_overshoot_weight * max_overshoot
+    )
 
     cost = (
         tail_mae_weight * tail_mae
         + jitter_weight * jitter_std
-        + overshoot_weight * overshoot
+        + overshoot
     )
 
     return {
@@ -520,8 +601,9 @@ def compute_near_cost(
         "tail_mae": float(tail_mae),
         "jitter_std": float(jitter_std),
         "overshoot": float(overshoot),
+        "mean_sq_overshoot": float(mean_sq_overshoot),
+        "max_overshoot": float(max_overshoot),
     }
-
 
 def compute_run_band_metrics(
     run_dir: Path,
@@ -558,9 +640,13 @@ def compute_run_band_metrics(
     mid_metrics = compute_mid_cost(
         df_mid=df_mid,
         near_threshold=args.near_threshold,
+        far_threshold=args.far_threshold,
         min_band_samples=args.min_band_samples,
         mae_weight=args.mid_mae_weight,
         slope_weight=args.mid_slope_weight,
+        brake_power=args.mid_brake_power,
+        brake_speed_target=args.mid_brake_speed_target,
+        brake_min_weight=args.mid_brake_min_weight,
     )
 
     near_metrics = compute_near_cost(
@@ -571,6 +657,7 @@ def compute_run_band_metrics(
         tail_mae_weight=args.near_tail_mae_weight,
         jitter_weight=args.near_jitter_weight,
         overshoot_weight=args.near_overshoot_weight,
+        max_overshoot_weight=args.near_max_overshoot_weight,
     )
 
     band_to_df = {"far": df_far, "mid": df_mid, "near": df_near}
@@ -929,9 +1016,13 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
             "far_time_weight": args.far_time_weight,
             "mid_mae_weight": args.mid_mae_weight,
             "mid_slope_weight": args.mid_slope_weight,
+            "mid_brake_power": args.mid_brake_power,
+            "mid_brake_speed_target": args.mid_brake_speed_target,
+            "mid_brake_min_weight": args.mid_brake_min_weight,
             "near_tail_mae_weight": args.near_tail_mae_weight,
             "near_jitter_weight": args.near_jitter_weight,
             "near_overshoot_weight": args.near_overshoot_weight,
+            "near_max_overshoot_weight": args.near_max_overshoot_weight,
             "xi": args.xi,
             "lcb_kappa": args.lcb_kappa,
             "n_candidates": args.n_candidates,

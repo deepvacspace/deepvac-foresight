@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bo.bo_common import append_mae_column, compute_tail_cost
+from utils.bo_common import append_mae_column, compute_tail_cost
 
 
 RUN_FILE_SPECS = (
