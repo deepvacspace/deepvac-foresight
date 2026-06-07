@@ -1,0 +1,67 @@
+{
+  "run_id": "gru_ranked_20260607_140346_ac387037",
+  "checkpoint": "C:\\Users\\mike_\\Desktop\\deepvac\\scripts\\gru\\validation_t1\\gru_t1.pt",
+  "feature_names": [
+    "temp",
+    "temp_ref",
+    "error",
+    "temp_u",
+    "temp_u_p",
+    "temp_u_i",
+    "temp_u_d",
+    "kp",
+    "ki",
+    "kd"
+  ],
+  "window_steps": 60,
+  "scenario": {
+    "start_temp": 27.0,
+    "target_temp": 0.0,
+    "duration_s": 1200.0,
+    "dt_s": 2.0,
+    "precondition_ref": 27.0
+  },
+  "selector": {
+    "horizon_s": 60.0,
+    "hold_s": 30.0,
+    "candidates_per_decision": 32,
+    "neighbor_pool": 300,
+    "overshoot_tolerance": 0.05,
+    "candidate_table": "C:\\Users\\mike_\\Desktop\\deepvac\\scripts\\gru\\mpc_pid_runs\\gru_pid_candidate_table.csv",
+    "candidate_table_rows": 5850
+  },
+  "bounds": {
+    "kp": [
+      1.0,
+      50.0
+    ],
+    "ki": [
+      1.0,
+      1000.0
+    ],
+    "kd": [
+      1.0,
+      80.0
+    ]
+  },
+  "metrics": {
+    "valid": true,
+    "invalid_reason": "",
+    "mae_full": 3.6538663265489495,
+    "tail_mae": 0.003650524988317153,
+    "tail_bias": 0.0018368242803230926,
+    "tail_std": 0.004811681593274486,
+    "overshoot_max": 0.4261477719992399,
+    "overshoot_rmse": 0.042872119739914304,
+    "final_error": -0.0010210296685499998,
+    "final_abs_error": 0.0010210296685499998,
+    "end_temp": 0.0010210296685499998,
+    "min_temp": -0.4261477719992399,
+    "max_temp": 26.811556711792946,
+    "time_to_near_s": 288.0,
+    "time_to_settle_s": 310.0,
+    "pid_changes": 32
+  },
+  "trajectory_csv": "C:\\Users\\mike_\\Desktop\\deepvac\\scripts\\gru\\gru_ranked_pid_runs\\gru_ranked_20260607_140346_ac387037\\gru_ranked_trajectory.csv",
+  "decisions_csv": "C:\\Users\\mike_\\Desktop\\deepvac\\scripts\\gru\\gru_ranked_pid_runs\\gru_ranked_20260607_140346_ac387037\\gru_ranked_decisions.csv"
+}
