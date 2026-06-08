@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -80,13 +80,14 @@ def resolve_decisions_csv(args: argparse.Namespace) -> Path:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     output_dir = Path(__file__).with_name("output")
-    ranked_root = ROOT / "gru" / "gru_ranked_pid_runs"
+    default_decisions = ROOT / "data" / "gru_ranked_decisions.csv"
+    ranked_root = ROOT / "data"
 
     ap = argparse.ArgumentParser(
         description="Run a TCP experiment replaying PID updates from GRU-ranked GP decisions."
     )
-    ap.add_argument("--decisions-csv", default=None,
-                    help="Path to gru_ranked_decisions.csv. Default: newest ranked run.")
+    ap.add_argument("--decisions-csv", default=str(default_decisions),
+                    help="Path to gru_ranked_decisions.csv.")
     ap.add_argument("--trajectory-csv", default=None,
                     help="Path to gru_ranked_trajectory.csv; sibling decisions CSV is used.")
     ap.add_argument("--ranked-root", default=str(ranked_root),
