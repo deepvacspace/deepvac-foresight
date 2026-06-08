@@ -15,6 +15,7 @@ history*/
 flask/fastapi/
 /bo
 /opc
+/build/gp_runtime/dist/DeepvacAIAdvisor
 
 nginx/
 .env

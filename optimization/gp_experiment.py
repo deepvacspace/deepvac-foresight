@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tcp.tcp_common import (  # noqa: E402
+from tcp.tcp_common import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
@@ -24,7 +24,7 @@ from tcp.tcp_common import (  # noqa: E402
     publish_temp_ref_job,
     request_temperature_states,
 )
-from utils.bo_common import (  # noqa: E402
+from utils.bo_common import (
     append_mae_column,
     append_rows_csv,
     compute_tail_cost,
