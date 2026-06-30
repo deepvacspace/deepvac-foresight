@@ -1,8 +1,0 @@
-# Python 3.10
-#
-# Runtime dependencies:
-# - tkinter is part of the standard Python installer on Windows.
-# - tcp_common.py is imported from the sibling ../tcp folder.
-#
-# Packaging dependency:
-pyinstaller==6.15.0
