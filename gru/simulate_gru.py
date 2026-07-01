@@ -3,7 +3,6 @@
 """
 
 from __future__ import annotations
-import matplotlib.pyplot as plt
 import torch
 import pandas as pd
 import numpy as np
@@ -15,10 +14,6 @@ import random
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
-
-import matplotlib
-
-matplotlib.use("Agg")
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -799,6 +794,9 @@ def simulate_reconstruction(
 
 
 def plot_trajectory(sim_df: pd.DataFrame, metrics: Dict[str, float], output_path: Path) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(sim_df["next_elapsed_s"],
             sim_df["real_temp_t1"], label="real temp")
@@ -827,6 +825,9 @@ def plot_trajectory(sim_df: pd.DataFrame, metrics: Dict[str, float], output_path
 
 
 def plot_error(sim_df: pd.DataFrame, metrics: Dict[str, float], output_path: Path) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(sim_df["next_elapsed_s"],
             sim_df["error_temp_t1"], color="#d62728", linewidth=1.7, label="reconstruction - real")

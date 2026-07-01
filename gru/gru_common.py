@@ -1,12 +1,55 @@
 from __future__ import annotations
 
 import math
+import sys
+import types
 from pathlib import Path
 from typing import Dict, Sequence, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
+
+
+def _ensure_sklearn_stub() -> None:
+    """Register minimal sklearn stubs so torch.load can unpickle StandardScaler
+    objects from checkpoints without requiring scikit-learn to be installed.
+
+    Pickle stores the *defining* module of a class. Depending on the sklearn
+    version used when the checkpoint was saved that path is one of:
+        sklearn.preprocessing._data.StandardScaler   (sklearn >= 0.24)
+        sklearn.preprocessing.data.StandardScaler    (sklearn < 0.24)
+    We register both, plus the top-level alias, and mark every stub module as a
+    package (``__path__ = []``) so Python allows sub-module lookups."""
+    if "sklearn" in sys.modules:
+        return
+
+    class _StandardScaler:
+        def transform(self, X: np.ndarray) -> np.ndarray:
+            return (X - self.mean_) / self.scale_
+
+        def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+            return X * self.scale_ + self.mean_
+
+    def _pkg(name: str) -> types.ModuleType:
+        m = types.ModuleType(name)
+        m.__path__ = []  # type: ignore[attr-defined]  # marks it as a package
+        m.__package__ = name
+        return m
+
+    sklearn_mod = _pkg("sklearn")
+    pre_mod = _pkg("sklearn.preprocessing")
+    pre_mod.StandardScaler = _StandardScaler  # type: ignore[attr-defined]
+    sklearn_mod.preprocessing = pre_mod  # type: ignore[attr-defined]
+
+    # submodule where StandardScaler is actually defined (version-dependent)
+    for sub in ("sklearn.preprocessing._data", "sklearn.preprocessing.data"):
+        sub_mod = types.ModuleType(sub)
+        sub_mod.StandardScaler = _StandardScaler  # type: ignore[attr-defined]
+        sys.modules[sub] = sub_mod
+
+    sys.modules["sklearn"] = sklearn_mod
+    sys.modules["sklearn.preprocessing"] = pre_mod
 
 
 DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "gru_t1.pt"
@@ -169,6 +212,7 @@ def load_model(
     checkpoint_path: Path,
     device: torch.device,
 ) -> Tuple[GRUModel, Dict[str, object]]:
+    _ensure_sklearn_stub()
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     model = GRUModel(

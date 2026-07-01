@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DeepVac Run Report - val_1777577798_68967736</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 32px; color: #172033; }
+    header { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid #ccd5e1; padding-bottom: 16px; }
+    h1 { margin: 0 0 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
+    th { background: #f1f5f9; }
+    .metrics { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; margin: 18px 0; }
+    .metric { border: 1px solid #dbe2ea; border-radius: 8px; padding: 12px; }
+    .metric span { display: block; color: #64748b; font-size: 11px; text-transform: uppercase; }
+    .metric strong { display: block; margin-top: 5px; font-size: 20px; }
+  </style>
+</head>
+<body>
+  <header><div><h1>val_1777577798_68967736</h1><div>run_history</div></div></header>
+  <section class="metrics">
+    <div class="metric"><span>Cost</span><strong>37.50506153039885</strong></div>
+    <div class="metric"><span>MAE</span><strong>7.430958868071462</strong></div>
+    <div class="metric"><span>Tail MAE</span><strong>0.5788031493836319</strong></div>
+    <div class="metric"><span>Overshoot</span><strong>1.668722152709961</strong></div>
+    <div class="metric"><span>Settle Time</span><strong>- s</strong></div>
+  </section>
+  <h2>Summary</h2>
+  <table><tbody><tr><th>run_id</th><td>val_1777577798_68967736</td></tr><tr><th>start_ts</th><td>1777578281.094063</td></tr><tr><th>end_ts</th><td>1777579480.968861</td></tr><tr><th>duration_s</th><td>1199.8747980594635</td></tr><tr><th>num_samples</th><td>598</td></tr><tr><th>start_temp</th><td>27.195850372314453</td></tr><tr><th>temp_ref</th><td>0.0</td></tr><tr><th>pid_source</th><td>schedule[0]</td></tr><tr><th>far_kp</th><td>7</td></tr><tr><th>far_ki</th><td>355</td></tr><tr><th>far_kd</th><td>15</td></tr><tr><th>mid_kp</th><td>10</td></tr><tr><th>mid_ki</th><td>694</td></tr><tr><th>mid_kd</th><td>8</td></tr><tr><th>near_kp</th><td>16</td></tr><tr><th>near_ki</th><td>105</td></tr><tr><th>near_kd</th><td>56</td></tr><tr><th>mse</th><td>151.28808487449555</td></tr><tr><th>mae</th><td>7.430958868071462</td></tr><tr><th>cost</th><td>37.50506153039885</td></tr><tr><th>tail_mae</th><td>0.5788031493836319</td></tr><tr><th>overshoot</th><td>1.668722152709961</td></tr></tbody></table>
+  <h2>PID Schedule</h2>
+  <table><thead><tr><th>run_id</th><th>band</th><th>kp</th><th>ki</th><th>kd</th><th>cost</th><th>n_samples</th><th>start_temp</th><th>target_temp</th><th>duration_s</th><th>far_mae</th><th>time_to_reach_mid_band</th><th>mid_mae</th><th>approach_speed</th><th>tail_mae</th><th>jitter_std</th><th>overshoot</th></tr></thead><tbody><tr><td>val_1777577798_68967736</td><td>far</td><td>7.0</td><td>355.0</td><td>15.0</td><td>21.550520801279276</td><td>180</td><td>27.195850372314453</td><td>0.0</td><td>1197.8853690624237</td><td>21.38673104710049</td><td>361.90517592430115</td><td></td><td></td><td></td><td></td><td></td></tr><tr><td>val_1777577798_68967736</td><td>mid</td><td>10.0</td><td>694.0</td><td>8.0</td><td>7.390719483331654</td><td>57</td><td>27.195850372314453</td><td>0.0</td><td>1197.8853690624237</td><td></td><td></td><td>6.2869564984974105</td><td>0.053090515426036856</td><td></td><td></td><td></td></tr><tr><td>val_1777577798_68967736</td><td>near</td><td>16.0</td><td>105.0</td><td>56.0</td><td>2.4771986798814174</td><td>360</td><td>27.195850372314453</td><td>0.0</td><td>1197.8853690624237</td><td></td><td></td><td></td><td></td><td>0.04141338613649074</td><td>0.05537606650912184</td><td>0.002325033160726683</td></tr></tbody></table>
+  <p>597 samples available in run data CSV.</p>
+</body>
+</html>
