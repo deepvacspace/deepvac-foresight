@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from lstm import (
+from lstm.lstm import (
     FEATURES,
     RUN_FILE_SPECS,
     add_derived_features,

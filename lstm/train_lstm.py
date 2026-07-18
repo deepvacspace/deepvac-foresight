@@ -39,7 +39,7 @@ from gru.utils import (  # noqa: E402
     split_runs,
     summarize_metrics_by_run,
 )
-from model import LSTMModel, SequenceDataset  # noqa: E402
+from lstm.model import LSTMModel, SequenceDataset  # noqa: E402
 
 
 WORK_DIR = ROOT / "optimization"

@@ -1,0 +1,8 @@
+matplotlib==3.10.7
+mlflow==3.10.1
+numpy==2.2.6
+optuna==4.7.0
+pandas==2.3.3
+scikit-learn==1.7.2
+scipy==1.15.3
+torch==2.12.0

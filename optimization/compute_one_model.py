@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bo.bo_common import append_mae_column, compute_tail_cost, parse_bounds, save_json
+from utils.bo_common import append_mae_column, compute_tail_cost, parse_bounds, save_json
 from utils.utils import append_row_csv
 
 FEATURE_COLS = [

@@ -1,7 +1,7 @@
 import socket
 from typing import Optional
 
-from tcp_common import (
+from tcp.tcp_common import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     INCOMING_STATE_VALUES_CODE,

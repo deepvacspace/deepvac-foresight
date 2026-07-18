@@ -18,8 +18,8 @@ from tcp.tcp_common import (
     publish_temp_ref_job,
     request_temperature_states,
 )
-from bo.bo_common import append_rows_csv, history_run_file, make_run_id
-import band_bo_gp as band_bo
+from utils.bo_common import append_rows_csv, history_run_file, make_run_id
+from optimization import band_bo_gp as band_bo
 
 import argparse
 import math
@@ -40,7 +40,7 @@ PIDTriplet = Tuple[int, int, int]
 
 def build_arg_parser() -> argparse.ArgumentParser:
     output_dir = Path(__file__).with_name("output")
-    ap = band_bo.build_parser()
+    ap = band_bo.build_arg_parser()
     ap.description = "Closed-loop runner using band_gp_bo three-model scheduling."
     ap.set_defaults(
         telemetry_names=["run_samples.csv"],

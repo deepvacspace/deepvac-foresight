@@ -1,0 +1,9 @@
+name: deepvac
+channels:
+  - defaults
+dependencies:
+  - python=3.10.19
+  - pip
+  - pip:
+      - -r requirements.lock.txt
+      - -e .

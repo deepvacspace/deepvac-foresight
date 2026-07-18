@@ -31,7 +31,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 try:
-    from gru_common import (
+    from gru.gru_common import (
         DEFAULT_CHECKPOINT,
         DEFAULT_FEATURE_NAMES,
         GRUModel,

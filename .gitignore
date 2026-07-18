@@ -31,3 +31,7 @@ credentials.json
 /plots
 /gru/diagnose_codesys.py
 /gru/diagnostics_t1/
+
+/.claude
+
+/summary.txt

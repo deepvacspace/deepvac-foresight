@@ -1,4 +1,4 @@
-from tcp_common import (
+from tcp.tcp_common import (
         DEFAULT_HOST,
         DEFAULT_PORT,
         DEFAULT_TIMEOUT,
