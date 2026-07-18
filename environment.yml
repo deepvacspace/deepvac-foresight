@@ -8,4 +8,5 @@ dependencies:
       - -r requirements/training.lock.txt
       - -r requirements/visualization.lock.txt
       - -r requirements/dev.lock.txt
+      - -r requirements/package.lock.txt
       - -e .[all]

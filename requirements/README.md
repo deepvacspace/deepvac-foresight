@@ -9,6 +9,7 @@ extras, each with an exact-pin lock file here:
 | `training`      | `training.lock.txt`       | Everything in `runtime` plus training new models: matplotlib, optuna (hyperparameter search), mlflow (experiment tracking). |
 | `visualization` | `visualization.lock.txt`  | Plotting/analysis scripts only (matplotlib), when you already have run-history CSVs and don't need torch/scikit-learn. |
 | `dev`           | `dev.lock.txt`             | Test tooling (pytest). |
+| `package`       | `package.lock.txt`        | `deepvac package-model`'s ONNX export for the control2-client (C++ Qt) desktop app: onnx, onnxruntime. |
 
 `pyproject.toml`'s `[project.optional-dependencies]` declares the direct,
 loosely-versioned requirements per group (what you'd hand-edit); the

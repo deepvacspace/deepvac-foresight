@@ -39,8 +39,15 @@ visualization = [
 dev = [
   "pytest>=8.0",
 ]
+# `deepvac package-model`'s ONNX export for control2-client (C++ Qt). See
+# requirements/package.lock.txt for exact pins.
+package = [
+  "deepvac[runtime]",
+  "onnx>=1.15,<2",
+  "onnxruntime>=1.17,<2",
+]
 all = [
-  "deepvac[training,visualization,dev]",
+  "deepvac[training,visualization,dev,package]",
 ]
 
 [project.scripts]

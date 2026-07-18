@@ -60,6 +60,9 @@ COMMANDS: Dict[str, Tuple[str, str]] = {
     "plot-metrics": ("optimization.plot_metrics", "Plot run-history metrics."),
     "plot-best": ("optimization.plot_best", "Plot trajectories for best/worst/average run groups."),
 
+    # --- Packaging (deepvac/) -----------------------------------------------
+    "package-model": ("deepvac.package_model", "Package a checkpoint for the insight/control2-client desktop apps."),
+
     # --- Chamber TCP protocol (tcp/) ----------------------------------------
     "tcp-get-states": ("tcp.get_states", "Read and print current controller states."),
     "tcp-get-settings": ("tcp.get_settings", "Read and print current controller settings."),

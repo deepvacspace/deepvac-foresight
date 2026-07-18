@@ -6,9 +6,10 @@ temperature/PID telemetry, searches for better PID gains with Gaussian-process
 Bayesian optimization, and trains GRU/LSTM neural "digital twins" for offline
 simulation and model-predictive PID selection.
 
-> **This is not the operator dashboard.** The Flask/desktop visualization
-> application that used to live in this repository has moved to a separate
-> `deepvac-insight` app and is intentionally not part of this package.
+> **This repo has no desktop/web UI of its own.** There are two separate
+> desktop apps that consume what this repo produces: `insight` (PySide6) and
+> `control2-client` (C++ Qt). Neither lives here -- see
+> [Packaging a model for the desktop apps](#packaging-a-model-for-the-desktop-apps).
 
 ## ⚠️ Safety
 
@@ -98,6 +99,14 @@ flowchart TB
     CLI -.-> Mpcgru
     CLI -.-> Replay
     CLI -.-> Analysis
+
+    subgraph External["Separate repos, not built from here"]
+        Insight["insight (PySide6)"]
+        Control2["control2-client (C++ Qt)"]
+    end
+
+    Twin_ckpt -->|"deepvac package-model"| Insight
+    Twin_ckpt -->|"deepvac package-model\n(ONNX export)"| Control2
 ```
 
 **Data flow, in words:** the chamber writes/reads telemetry over
@@ -130,10 +139,6 @@ run-artifact persistence.
   `gru/train_gru.py`.
 - `optimization/` -- Bayesian optimization / AI advisor, live-chamber replay
   scripts, and run analysis/plotting.
-- `build/gp_runtime/` -- a separately maintained snapshot used to
-  PyInstaller-build a standalone `DeepvacAIAdvisor.exe`. It is **not**
-  synced from the packages above and is out of scope for this refactor,
-  same as the separate visualization app.
 
 ## Installation
 
@@ -155,6 +160,7 @@ Or, without conda, pick just the extra you need:
 python -m pip install -e ".[runtime]" -r requirements\runtime.lock.txt        # chamber control + inference only
 python -m pip install -e ".[training]" -r requirements\training.lock.txt      # + training, optuna, mlflow
 python -m pip install -e ".[visualization]" -r requirements\visualization.lock.txt  # plotting only, no torch
+python -m pip install -e ".[package]" -r requirements\package.lock.txt        # + deepvac package-model (ONNX export)
 ```
 
 The default PyPI `torch` wheel (pinned in `requirements/runtime.lock.txt`) is
@@ -177,6 +183,7 @@ unchanged -- `deepvac train-gru --help` is identical to
 deepvac --list                 # every subcommand with a one-line description
 deepvac train-gru --help
 deepvac mpc-lstm --checkpoint lstm\validation_t1\lstm_t1.pt --cpu --duration-s 600
+deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt --target insight,control2-client
 ```
 
 Running scripts directly as modules (`python -m gru.train_gru --help`) still
@@ -257,6 +264,43 @@ sending anything, `batch_gp_experiment.py` supports `--dry-run`:
 ```powershell
 python -m optimization.batch_gp_experiment --dry-run
 ```
+
+## Packaging a model for the desktop apps
+
+`deepvac package-model` (`deepvac/packaging.py`) hands a trained checkpoint
+off to whichever of the two downstream desktop apps you name, assuming the
+default sibling-directory layout `<root>/deepvac/scripts` (this repo),
+`<root>/deepvac/insight`, `<root>/control2-client` -- override with
+`--insight-root`/`--control2-client-root` if yours differs. Requires the
+`package` extra (`pip install -e ".[package]" -r requirements\package.lock.txt`).
+
+```powershell
+deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt --target insight,control2-client
+```
+
+- **`insight`** (PySide6, GRU only): copies the checkpoint to
+  `insight/app/model/model.pt` and regenerates the shared plant-model
+  primitives in `insight/app/model/simulation.py` from this repo's
+  `deepvac/mpc.py` + `gru/gru_common.py` (everything above the
+  `# === END GENERATED ===` marker in that file). The Simulator view's own
+  logic below that marker (`simulate_candidate`, `compute_metrics`) is
+  hand-maintained in the `insight` repo and is left untouched.
+- **`control2-client`** (C++ Qt): that app has no ONNX Runtime or LibTorch
+  linked yet, so this exports a self-contained ONNX graph -- scaling is
+  baked in, so the C++ side feeds a raw feature window and reads back a raw
+  temperature delta (°C) with no need to reimplement the checkpoint's
+  `StandardScaler` -- to `control2-client/data/model/{gru,lstm}_plant_model.onnx`,
+  plus a `.json` sidecar describing the expected input shape and feature
+  order. `deepvac package-model` verifies the exported graph numerically
+  against the original PyTorch model before reporting success (pass
+  `--no-verify-onnx` to skip). Actually loading that ONNX file from
+  `control2-client`'s C++ code (wiring ONNX Runtime C++ into its CMake
+  build) is separate follow-up work in that repo.
+
+`--model-type gru|lstm` is inferred from the checkpoint path when omitted
+(whichever of `gru`/`lstm` appears as a path component); pass it explicitly
+if that's ambiguous. `--target insight` requires `--model-type gru` --
+`insight/app/model/simulation.py` is hard-typed to `GRUModel`.
 
 ## Known gaps
 
