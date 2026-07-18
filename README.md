@@ -1,45 +1,25 @@
-# Deepvac
+# Deepvac Sentinel
 
 Research and engineering toolkit for temperature control of a vacuum chamber.
-It talks to a chamber controller over a proprietary TCP protocol, records
+It communicates to a chamber controller over a TCP protocol, records
 temperature/PID telemetry, searches for better PID gains with Gaussian-process
 Bayesian optimization, and trains GRU/LSTM neural "digital twins" for offline
 simulation and model-predictive PID selection.
-
-> **This repo has no desktop/web UI of its own.** There are two separate
-> desktop apps that consume what this repo produces: `insight` (PySide6) and
-> `control2-client` (C++ Qt). Neither lives here -- see
-> [Packaging a model for the desktop apps](#packaging-a-model-for-the-desktop-apps).
 
 ## ⚠️ Safety
 
 This toolkit can write PID coefficients directly to a real chamber
 controller over an **unauthenticated, unencrypted** TCP connection
-(`tcp/tcp_common.py`). **`--tcp-host`/`--tcp-port` default to a real
-controller address hard-coded in `tcp/tcp_common.py:7-8`
-(`DEFAULT_HOST = "172.0.30.10"`), so running any of these scripts with no
-`--tcp-host` override targets real hardware by default.** There is no
+(`tcp/tcp_common.py`). **`--tcp-host`/`--tcp-port` There is no
 independent supervisory interlock, confirmation prompt, or emergency stop
 built into any of them.
 
 - `optimization/mpc_experiment.py`, `gp_experiment.py`, `tocero_3band.py`,
   `tocero_5band.py`, `random_pid_tests.py`, and `training_loop.py` all write
-  PID values over TCP and have **no `--dry-run` flag** -- the only way to
-  preview what they would send is to read the script's PID-selection logic
-  and the run's PID bounds flags yourself before running it.
-  `optimization/batch_gp_experiment.py` is the one exception and does
-  support `--dry-run` (prints the planned per-scenario commands without
-  running them).
+  PID values over TCP.
 - Anything under `gru/`, `lstm/`, and `deepvac/mpc.py` that reads
   "simulation"/"MPC scheduler" runs entirely offline against a trained
-  neural-network plant model -- it never touches the chamber. It is safe to
-  run repeatedly.
-- Before any live run: pass an explicit `--tcp-host` you have verified,
-  confirm PID bounds are sane for your hardware, and have a way to
-  physically intervene.
-- There is no automated pass/fail gate on a trained model before it's used to
-  pick live PID values -- validate a checkpoint's `validation_report*.json`
-  yourself first.
+  neural-network plant model.
 
 ## Architecture
 
@@ -118,8 +98,7 @@ a `run_history`-style directory. `gru/` and `lstm/` train neural plant models
 on that same history, then use the trained checkpoint for pure offline
 simulation (`simulate_*.py`) or a receding-horizon MPC scheduler
 (`mpc_gru.py` / `mpc_lstm.py`, sharing their rollout/optimizer loop via
-`deepvac/mpc.py`). `deepvac/` holds everything that used to be duplicated or
-inconsistently imported between those packages: protocol re-export, PID
+`deepvac/mpc.py`). `deepvac/` holds: protocol re-export, PID
 bounds/banding, cost/acquisition math, dataset/sequence building, and
 run-artifact persistence.
 
@@ -168,9 +147,6 @@ CPU-only and portable. For CUDA, install the matching PyTorch wheel for your
 driver from the [official PyTorch installation selector](https://pytorch.org/get-started/locally/)
 *before* installing this project's `runtime`/`training` extra, so pip doesn't
 overwrite it with the CPU build.
-
-`PYTHONNOUSERSITE=1` prevents packages in the per-user Python directory from
-overriding packages installed in the Conda environment.
 
 ## Unified CLI
 
@@ -247,31 +223,13 @@ Fits far/mid/near GP models to `run_history/` and writes suggested next PID
 candidates to `optimization\output\band_bo_next_params.json` -- this only
 *suggests* values, it does not write anything to the chamber.
 
-### 4. Guarded live validation (writes to real hardware)
-
-Read the [Safety](#️-safety) section above first -- `mpc_experiment.py` has
-no `--dry-run`, so "guarded" here means reviewing the decisions CSV and PID
-bounds yourself before running it, and always passing an explicit,
-verified `--tcp-host`:
-
-```powershell
-python -m optimization.mpc_experiment --decisions-csv gru\mpc_pid_runs\<run_id>\mpc_decisions.csv --tcp-host <verified-controller-ip> --tcp-port 4321 --pid-row 0
-```
-
-If you only want to see what a batch of scenarios *would* run without
-sending anything, `batch_gp_experiment.py` supports `--dry-run`:
-
-```powershell
-python -m optimization.batch_gp_experiment --dry-run
-```
 
 ## Packaging a model for the desktop apps
 
 `deepvac package-model` (`deepvac/packaging.py`) hands a trained checkpoint
-off to whichever of the two downstream desktop apps you name, assuming the
+off to whichever of the two downstream desktop apps, assuming the
 default sibling-directory layout `<root>/deepvac/scripts` (this repo),
-`<root>/deepvac/insight`, `<root>/control2-client` -- override with
-`--insight-root`/`--control2-client-root` if yours differs. Requires the
+`<root>/deepvac/insight`, `<root>/control2-client`. Requires the
 `package` extra (`pip install -e ".[package]" -r requirements\package.lock.txt`).
 
 ```powershell
@@ -301,12 +259,3 @@ deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt --target insight,
 (whichever of `gru`/`lstm` appears as a path component); pass it explicitly
 if that's ambiguous. `--target insight` requires `--model-type gru` --
 `insight/app/model/simulation.py` is hard-typed to `GRUModel`.
-
-## Known gaps
-
-No automated test suite, CI, or model-acceptance gate exists yet (see
-`pyproject.toml`'s `[tool.pytest.ini_options]`, which is configured for a
-`tests/` directory that doesn't exist). Trained models, run histories, and
-plots are tracked as regular files rather than in an external artifact store.
-Treat this as an expert-operated experimental toolkit, not an autonomous
-production controller.
