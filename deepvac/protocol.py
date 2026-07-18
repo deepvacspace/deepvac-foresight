@@ -1,0 +1,72 @@
+"""Canonical import path for the chamber TCP protocol.
+
+The wire protocol (packet framing, CRC-16, Pascal strings, settings/state
+requests, PID writes) is implemented once, in tcp/tcp_common.py, and is not
+duplicated elsewhere in the source tree. tcp/get_settings.py, get_states.py,
+temp_ref.py, and write_setting.py import it directly since they live next to
+it; everything else (deepvac.pid, optimization/) should import it from here
+so there is one obvious canonical path regardless of which package is doing
+the importing.
+"""
+
+from __future__ import annotations
+
+from tcp.tcp_common import (
+    DEFAULT_HOST,
+    DEFAULT_JOB_FLAGS,
+    DEFAULT_PORT,
+    DEFAULT_TIMEOUT,
+    _pid_keys,
+    apply_pid_update,
+    connected_socket,
+    crc16_ccitt_false,
+    make_packet,
+    make_pascal_string,
+    make_settings_map_body,
+    make_text_cmd_body,
+    parse_pascal_string,
+    parse_settings_map_body,
+    parse_state_names,
+    parse_state_values,
+    publish_temp_ref_job,
+    read_one_packet,
+    recv_exact,
+    request_settings,
+    request_states,
+    request_temperature_states,
+    send_and_wait,
+    send_no_wait,
+    setpoint_job_body,
+    verify_pid,
+    write_pid_row,
+)
+
+__all__ = [
+    "DEFAULT_HOST",
+    "DEFAULT_JOB_FLAGS",
+    "DEFAULT_PORT",
+    "DEFAULT_TIMEOUT",
+    "_pid_keys",
+    "apply_pid_update",
+    "connected_socket",
+    "crc16_ccitt_false",
+    "make_packet",
+    "make_pascal_string",
+    "make_settings_map_body",
+    "make_text_cmd_body",
+    "parse_pascal_string",
+    "parse_settings_map_body",
+    "parse_state_names",
+    "parse_state_values",
+    "publish_temp_ref_job",
+    "read_one_packet",
+    "recv_exact",
+    "request_settings",
+    "request_states",
+    "request_temperature_states",
+    "send_and_wait",
+    "send_no_wait",
+    "setpoint_job_body",
+    "verify_pid",
+    "write_pid_row",
+]

@@ -1,0 +1,10 @@
+# Exact, reproducible dependency set for `pip install -e ".[dev]"`.
+#
+# Testing tooling. pyproject.toml already configures
+# [tool.pytest.ini_options] (testpaths = ["tests"]); this is what runs it.
+# Not derived from the validated environment freeze (pytest was not
+# installed there) -- pinned directly instead.
+iniconfig==2.0.0
+packaging==25.0
+pluggy==1.5.0
+pytest==8.3.4

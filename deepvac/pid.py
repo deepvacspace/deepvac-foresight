@@ -1,50 +1,79 @@
+"""PID coefficient bounds, banding, scheduling, and TCP readback.
+
+Consolidates logic that used to live in utils/utils.py (band scheduling,
+random selection, TCP readback -- used by optimization/) and, byte-for-byte
+duplicated, in gru/mpc_gru.py and lstm/mpc_lstm.py (bounds/clipping for the
+MPC candidate optimizers).
+"""
+
 from __future__ import annotations
 
-import csv
+import argparse
 import math
-from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from tcp.tcp_common import _pid_keys, request_settings
+import numpy as np
+
+from deepvac import protocol
 
 PIDTriplet = Tuple[int, int, int]
 
 
-def append_row_csv(path: str, row: Dict[str, object]) -> None:
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
+def parse_bounds(text: str) -> Tuple[float, float]:
+    if not isinstance(text, str):
+        raise ValueError(f"Bounds must be a string, got: {type(text)}")
 
-    if (not out.exists()) or out.stat().st_size == 0:
-        with out.open("a", encoding="utf-8", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
-            writer.writeheader()
-            writer.writerow(row)
-        return
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 2:
+        raise ValueError(f"Invalid bounds format: '{text}'. Expected 'low,high'")
 
-    with out.open("r", encoding="utf-8", newline="") as fh:
-        reader = csv.reader(fh)
-        header = next(reader, [])
+    try:
+        lo = float(parts[0])
+        hi = float(parts[1])
+    except ValueError:
+        raise ValueError(f"Bounds must be numeric: '{text}'")
 
-    if not header:
-        with out.open("a", encoding="utf-8", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
-            writer.writeheader()
-            writer.writerow(row)
-        return
+    if lo >= hi:
+        raise ValueError(f"Invalid bounds '{text}': low must be < high")
 
-    aligned_row = {col: row.get(col) for col in header}
-    with out.open("a", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=header)
-        writer.writerow(aligned_row)
+    return lo, hi
+
+
+# -----------------------------------------------------------------------------
+# MPC-style array bounds (gru/mpc_gru.py, lstm/mpc_lstm.py).
+# -----------------------------------------------------------------------------
+
+
+def pid_bounds(args: argparse.Namespace) -> Tuple[np.ndarray, np.ndarray]:
+    """Read (kp_min, ki_min, kd_min) / (kp_max, ki_max, kd_max) off `args`."""
+    lo = np.asarray([args.kp_min, args.ki_min, args.kd_min], dtype=float)
+    hi = np.asarray([args.kp_max, args.ki_max, args.kd_max], dtype=float)
+    if np.any(hi <= lo):
+        raise ValueError(f"Invalid PID bounds: lo={lo}, hi={hi}")
+    return lo, hi
+
+
+def clip_pid(x: np.ndarray, args: argparse.Namespace) -> np.ndarray:
+    """Clip a (kp, ki, kd) vector to `args`' bounds and round to the nearest int."""
+    lo, hi = pid_bounds(args)
+    y = np.clip(np.asarray(x, dtype=float), lo, hi)
+    y = np.floor(y + 0.5)
+    y = np.clip(y, lo, hi)
+    return y.astype(float)
+
+
+# -----------------------------------------------------------------------------
+# TCP readback and band scheduling (optimization/).
+# -----------------------------------------------------------------------------
 
 
 def read_pid_from_tcp(row: int, args: Any) -> Dict[str, float]:
-    settings = request_settings(
+    settings = protocol.request_settings(
         host=args.tcp_host,
         port=args.tcp_port,
         timeout=args.tcp_timeout,
     )
-    kp_key, ki_key, kd_key = _pid_keys(row)
+    kp_key, ki_key, kd_key = protocol._pid_keys(row)
     for key in (kp_key, ki_key, kd_key):
         if key not in settings:
             raise KeyError(f"TCP settings missing expected key: {key}")
@@ -55,14 +84,10 @@ def read_pid_from_tcp(row: int, args: Any) -> Dict[str, float]:
     if not (math.isfinite(kp) and math.isfinite(ki) and math.isfinite(kd)):
         raise RuntimeError(f"PID read from TCP contains non-finite values: kp={kp}, ki={ki}, kd={kd}")
 
-    return {
-        "kp": kp,
-        "ki": ki,
-        "kd": kd,
-    }
+    return {"kp": kp, "ki": ki, "kd": kd}
 
 
-def random_pid(args: Any, rng: Any) -> Tuple[int, int, int]:
+def random_pid(args: Any, rng: Any) -> PIDTriplet:
     kp = rng.randint(args.kp_min, args.kp_max)
     ki = rng.randint(args.ki_min, args.ki_max)
     kd = rng.randint(args.kd_min, args.kd_max)

@@ -5,5 +5,7 @@ dependencies:
   - python=3.10.19
   - pip
   - pip:
-      - -r requirements.lock.txt
-      - -e .
+      - -r requirements/training.lock.txt
+      - -r requirements/visualization.lock.txt
+      - -r requirements/dev.lock.txt
+      - -e .[all]

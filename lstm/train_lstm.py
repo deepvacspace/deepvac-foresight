@@ -23,7 +23,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from gru.utils import (  # noqa: E402
+from deepvac.datasets import (  # noqa: E402
     FEATURE_NAMES,
     build_prediction_details,
     build_sequences,

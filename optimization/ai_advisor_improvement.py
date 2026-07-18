@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from deepvac.artifacts import iter_run_dirs
+
 
 REQUIRED_SAMPLE_COLS = {"timestamp", "temp", "temp_ref"}
 
@@ -48,12 +50,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--top-n", type=int, default=10)
     ap.add_argument("--show", action="store_true")
     return ap
-
-
-def iter_run_dirs(history_root: Path) -> Iterable[Path]:
-    if not history_root.exists():
-        raise FileNotFoundError(f"History root does not exist: {history_root}")
-    yield from (child for child in sorted(history_root.iterdir()) if child.is_dir())
 
 
 def read_samples(run_dir: Path) -> Optional[pd.DataFrame]:

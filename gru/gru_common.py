@@ -10,6 +10,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401  (re-exported for callers)
+
 
 def _ensure_sklearn_stub() -> None:
     """Register minimal sklearn stubs so torch.load can unpickle StandardScaler
@@ -53,19 +55,6 @@ def _ensure_sklearn_stub() -> None:
 
 
 DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "gru_t1.pt"
-
-DEFAULT_FEATURE_NAMES = [
-    "temp",
-    "temp_ref",
-    "error",
-    "temp_u",
-    "temp_u_p",
-    "temp_u_i",
-    "temp_u_d",
-    "kp",
-    "ki",
-    "kd",
-]
 
 
 class GRUModel(nn.Module):

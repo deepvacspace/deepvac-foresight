@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Tuple
-
-import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
+
+from deepvac.models import SequenceDataset  # noqa: F401  (re-exported for callers)
 
 
 class LSTMModel(nn.Module):
@@ -37,15 +35,3 @@ class LSTMModel(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out, _ = self.lstm(x)
         return self.head(out[:, -1, :])
-
-
-class SequenceDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray) -> None:
-        self.X = torch.as_tensor(X, dtype=torch.float32)
-        self.y = torch.as_tensor(y, dtype=torch.float32)
-
-    def __len__(self) -> int:
-        return int(len(self.X))
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.X[idx], self.y[idx]

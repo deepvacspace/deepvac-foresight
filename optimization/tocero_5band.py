@@ -16,13 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
 	sys.path.insert(0, str(ROOT))
 
-from utils.bo_common import (
-	append_mae_column,
-	append_rows_csv,
-	compute_tail_cost,
-	history_run_file,
-	make_run_id,
-)
+from deepvac.metrics import append_mae_column, compute_tail_cost
+from deepvac.artifacts import append_rows_csv, history_run_file, make_run_id, append_row_csv
 from tcp.tcp_common import (  # noqa: E402
 	DEFAULT_HOST,
 	DEFAULT_PORT,
@@ -31,7 +26,7 @@ from tcp.tcp_common import (  # noqa: E402
 	publish_temp_ref_job,
 	request_temperature_states,
 )
-from utils.utils import _band_range, append_row_csv, plan_pid, read_pid_from_tcp
+from deepvac.pid import _band_range, plan_pid, read_pid_from_tcp
 
 PIDTriplet = Tuple[int, int, int]
 BANDS = ("very_far", "far", "mid", "near", "very_near")

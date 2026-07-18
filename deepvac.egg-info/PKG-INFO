@@ -4,14 +4,22 @@ Version: 0.1.0
 Summary: Digital-twin and PID optimization tools for the Deepvac chamber
 Requires-Python: <3.11,>=3.10
 Description-Content-Type: text/markdown
-Requires-Dist: matplotlib==3.10.7
-Requires-Dist: mlflow==3.10.1
-Requires-Dist: numpy==2.2.6
-Requires-Dist: optuna==4.7.0
-Requires-Dist: pandas==2.3.3
-Requires-Dist: scikit-learn==1.7.2
-Requires-Dist: scipy==1.15.3
-Requires-Dist: torch==2.12.0
+Provides-Extra: runtime
+Requires-Dist: numpy==2.2.6; extra == "runtime"
+Requires-Dist: pandas==2.3.3; extra == "runtime"
+Requires-Dist: scikit-learn==1.7.2; extra == "runtime"
+Requires-Dist: torch==2.12.0; extra == "runtime"
+Provides-Extra: training
+Requires-Dist: deepvac[runtime]; extra == "training"
+Requires-Dist: matplotlib==3.10.7; extra == "training"
+Requires-Dist: mlflow==3.10.1; extra == "training"
+Requires-Dist: optuna==4.7.0; extra == "training"
+Provides-Extra: visualization
+Requires-Dist: matplotlib==3.10.7; extra == "visualization"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Provides-Extra: all
+Requires-Dist: deepvac[dev,training,visualization]; extra == "all"
 
 # Deepvac
 ## Overview
@@ -45,6 +53,10 @@ python -m pip check
 python -c "import torch, mlflow, optuna; print(torch.__version__)"
 ```
 
+`requirements.txt` is the minimal direct dependency set.
+`requirements.lock.txt` captures the complete validated Windows environment and
+is used by `environment.yml` for repeatable Conda recreation.
+
 `PYTHONNOUSERSITE=1` prevents packages in the per-user Python directory from
 overriding packages installed in the Conda environment. This matters when a
 user-site `pip` installation is incomplete or incompatible.
@@ -55,7 +67,7 @@ Run tools as modules from the repository root so imports are deterministic:
 python -m gru.train_gru --help
 python -m lstm.train_lstm --help
 python -m optimization.training_loop --help
-python -m tcp.get_states --help
+python -m tcp.get_states  # connects to the configured chamber
 ```
 
 The default PyPI `torch` package provides portable CPU operation. For CUDA,

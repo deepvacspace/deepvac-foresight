@@ -1,3 +1,14 @@
+"""Run-history discovery, sequence building, scaling, and plotting for the
+one-step GRU/LSTM plant models.
+
+This is a straight move of what used to be gru/utils.py: despite the name,
+it was already model-agnostic and lstm/train_lstm.py imported every public
+name from it directly (`from gru.utils import ...`). That cross-package
+import was the concrete instance of the "model vs gru.model" import-mixing
+this package resolves -- there was already exactly one implementation, just
+homed under the wrong package name.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -16,34 +27,11 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from deepvac.schemas import DEFAULT_FEATURE_NAMES
 
-FEATURE_NAMES = [
-    "temp",
-    "temp_ref",
-    "error",
-    "temp_u",
-    "temp_u_p",
-    "temp_u_i",
-    "temp_u_d",
-    "kp",
-    "ki",
-    "kd",
-]
+# Kept as FEATURE_NAMES for backward-compatible imports.
+FEATURE_NAMES = DEFAULT_FEATURE_NAMES
 
-
-"""
-def _load_pyplot():
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        return plt
-    except Exception as exc:
-        print(f"[WARN] Plot skipped because matplotlib is unavailable: {exc}")
-        return None
-"""
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
@@ -293,7 +281,7 @@ def scale_datasets(
 def compute_real_metrics(
     pred_scaled: np.ndarray,
     target_scaled: np.ndarray,
-    y_scaler: StandardScaler,
+    y_scaler,
 ) -> Dict[str, float]:
     pred_delta = y_scaler.inverse_transform(pred_scaled)
     target_delta = y_scaler.inverse_transform(target_scaled)
@@ -373,9 +361,6 @@ def summarize_metrics_by_run(pred_df: pd.DataFrame) -> pd.DataFrame:
 def plot_training_history(history_rows: Sequence[Dict[str, float]], output_path: Path) -> None:
     if not history_rows:
         return
-    # plt = _load_pyplot()
-    # if plt is None:
-    #     return
 
     history = pd.DataFrame(history_rows)
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -399,9 +384,6 @@ def plot_best_test_prediction(
 ) -> None:
     if pred_df.empty or per_run_metrics.empty:
         return
-    #plt = _load_pyplot()
-    #if plt is None:
-    #    return
 
     best_run = str(per_run_metrics.iloc[0]["run_id"])
     run_df = pred_df[pred_df["run_id"] == best_run].sort_values("elapsed_s")
@@ -428,9 +410,6 @@ def plot_best_test_temperature(
 ) -> None:
     if pred_df.empty or per_run_metrics.empty:
         return
-    # plt = _load_pyplot()
-    # if plt is None:
-    #     return
 
     best_run = str(per_run_metrics.iloc[0]["run_id"])
     run_df = pred_df[pred_df["run_id"] == best_run].sort_values("elapsed_s")

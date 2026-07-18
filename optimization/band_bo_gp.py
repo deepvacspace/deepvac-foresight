@@ -8,12 +8,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import pickle
 import time
 from itertools import product
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,6 +20,13 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.preprocessing import StandardScaler
 
+from deepvac.metrics import (
+    expected_improvement,
+    expected_information_gain,
+    lower_confidence_bound,
+    parse_bounds,
+)
+from deepvac.artifacts import iter_run_dirs, save_json
 
 BANDS = ("far", "mid", "near")
 OUTPUT_DIR = Path(__file__).with_name("output")
@@ -147,74 +153,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return ap
 
 
-# --------------------------- EXPECTED IMPROVEMENT CALCULATION ---------------------------
-
-# probability density function of standard normal distribution
-def normal_pdf(z: np.ndarray) -> np.ndarray:
-    return np.exp(-0.5 * np.square(z)) / np.sqrt(2.0 * np.pi)
-
-# cumulative density function of standard normal distribution
-
-
-def normal_cdf(z: np.ndarray) -> np.ndarray:
-    erf_vec = np.vectorize(math.erf)
-    return 0.5 * (1.0 + erf_vec(z / np.sqrt(2.0)))
-
-
-def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: float) -> np.ndarray:
-    """
-    y_best is the lowest observed cost so far.
-    mu is predicted cost.
-    sigma is prediction uncertainty.
-
-    High EI:
-      - predicted cost is lower than current best
-      - uncertainty is large enough that the candidate is worth testing
-    """
-    sigma_safe = np.maximum(sigma, 1e-12)
-    improvement = y_best - mu - xi
-    z = improvement / sigma_safe
-    ei = improvement * normal_cdf(z) + sigma_safe * normal_pdf(z)
-    ei[sigma <= 1e-12] = 0.0
-    return ei
-
-
-# --------------------------- LOWER CONFIDENCE BOUND CALCULATION ---------------------------
-
-def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> np.ndarray:
-    """
-    Low LCB: 
-        - candidate with low predicted cost 
-        - high uncertainty.
-    """
-    return mu - kappa * sigma
-
-
-# --------------------------- EXPECTED INFORMATION GAIN CALCULATION ---------------------------
-
-def expected_information_gain(sigma: np.ndarray) -> np.ndarray:
-    """
-    candidates with larger predictive uncertainty are expected
-    to teach the model more. The additive entropy constant does not affect ranking,
-    but keeping the full Gaussian entropy makes the logged score interpretable.
-    """
-    sigma_safe = np.maximum(sigma, 1e-12)
-    return 0.5 * np.log(2.0 * np.pi * np.e * np.square(sigma_safe))
-
-# -------------------------------------- UTILS ---------------------------
-
-
-def parse_bounds(text: str) -> Tuple[float, float]:
-    lo, hi = [float(x.strip()) for x in text.split(",")]
-    if not lo < hi:
-        raise ValueError(
-            f"Invalid bounds {text!r}; expected low,high with low < high.")
-    return lo, hi
-
-
-def save_json(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+# EI/LCB/EIG acquisition, parse_bounds, and save_json now come from
+# deepvac.metrics / deepvac.artifacts (see imports above) instead of being
+# defined here -- they were copy-pasted duplicates of utils/bo_common.py.
 
 
 def format_number(value: object) -> str:
@@ -296,16 +237,6 @@ def finite_or_fallback(primary: float, fallback: Optional[float]) -> float:
     if fallback is not None and np.isfinite(fallback):
         return float(fallback)
     return float("nan")
-
-
-def iter_run_dirs(history_root: Path) -> Iterable[Path]:
-
-    if not history_root.exists():
-        raise FileNotFoundError(f"History root does not exist: {history_root}")
-
-    for child in sorted(history_root.iterdir()):
-        if child.is_dir():
-            yield child
 
 
 def safe_mean(x: pd.Series | np.ndarray) -> float:

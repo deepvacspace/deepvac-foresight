@@ -1,0 +1,21 @@
+# Exact, reproducible dependency set for `pip install -e ".[visualization]"`.
+#
+# For the plotting/analysis-only scripts (optimization/plot_metrics.py,
+# plot_best.py, ai_advisor_improvement.py, gru/diagnose_codesys.py,
+# gru/gru_multi_time.py, lstm/lstm.py, lstm/predict.py) when you already have
+# run-history CSVs and don't need torch/scikit-learn/mlflow/optuna.
+#
+# Regenerate by installing `.[visualization]` into a clean environment and
+# running `pip freeze`, or see requirements/README.md for the closure method
+# used to derive this from the full validated environment.
+contourpy==1.3.2
+cycler==0.12.1
+fonttools==4.61.1
+kiwisolver==1.4.9
+matplotlib==3.10.7
+numpy==2.2.6
+packaging==25.0
+pillow==12.0.0
+pyparsing==3.3.1
+python-dateutil==2.9.0.post0
+six==1.17.0

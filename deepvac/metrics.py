@@ -1,15 +1,15 @@
-#!/usr/bin/env python3
-"""Shared Bayesian optimization, cost, and run-file utilities."""
+"""Cost functions and Bayesian-optimization acquisition math.
+
+Consolidates utils/bo_common.py (the single import path all of optimization/
+already agreed on) with optimization/band_bo_gp.py, which had copy-pasted
+normal_pdf/normal_cdf/expected_improvement/parse_bounds/save_json instead of
+importing them.
+"""
 
 from __future__ import annotations
 
-import csv
-import json
 import math
-import time
-import uuid
-from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -17,46 +17,41 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.preprocessing import StandardScaler
 
-
-def make_run_id(prefix: str = "run") -> str:
-    return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+from deepvac.pid import parse_bounds  # noqa: F401  (re-exported for callers migrating off bo_common)
 
 
-def append_rows_csv(path: str, rows: Iterable[Dict[str, object]]) -> None:
-    rows = list(rows)
-    if not rows:
-        return
-
-    out_path = Path(path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    write_header = not out_path.exists() or out_path.stat().st_size == 0
-    with out_path.open("a", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-        if write_header:
-            writer.writeheader()
-        writer.writerows(rows)
+def normal_pdf(z: np.ndarray) -> np.ndarray:
+    return np.exp(-0.5 * np.square(z)) / math.sqrt(2.0 * math.pi)
 
 
-def history_run_file(run_id: str, filename: str, folder_name: str = "history") -> str:
-    return str(Path(folder_name) / run_id / Path(filename).name)
+def normal_cdf(z: np.ndarray) -> np.ndarray:
+    erf_vec = np.vectorize(math.erf)
+    return 0.5 * (1.0 + erf_vec(z / math.sqrt(2.0)))
 
 
-def load_runs_table(path: str) -> pd.DataFrame:
-    p = Path(path)
-    if p.exists() and p.stat().st_size > 0:
-        return pd.read_csv(p)
+def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: float = 0.01) -> np.ndarray:
+    """High EI: predicted cost below the current best, with enough uncertainty
+    that the candidate is still worth testing. `y_best` is the lowest observed
+    cost so far; `mu`/`sigma` are the GP's predicted cost and its uncertainty."""
+    sigma_safe = np.maximum(sigma, 1e-12)
+    improvement = y_best - mu - xi
+    z = improvement / sigma_safe
+    ei = improvement * normal_cdf(z) + sigma_safe * normal_pdf(z)
+    ei[sigma <= 1e-12] = 0.0
+    return ei
 
-    # Fallback for run-scoped storage under history/<run_id>/<filename>.
-    target_name = p.name
-    tables = []
-    for match in Path("history").glob(f"*/{target_name}"):
-        if match.is_file() and match.stat().st_size > 0:
-            tables.append(pd.read_csv(match))
-    if tables:
-        return pd.concat(tables, ignore_index=True)
 
-    return pd.DataFrame(columns=["run_id", "kp", "ki", "kd", "mse"])
+def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> np.ndarray:
+    """Low LCB: candidate with low predicted cost and high uncertainty."""
+    return mu - kappa * sigma
+
+
+def expected_information_gain(sigma: np.ndarray) -> np.ndarray:
+    """Candidates with larger predictive uncertainty are expected to teach the
+    model more. The additive entropy constant doesn't affect ranking, but
+    keeping the full Gaussian entropy makes the logged score interpretable."""
+    sigma_safe = np.maximum(sigma, 1e-12)
+    return 0.5 * np.log(2.0 * np.pi * np.e * np.square(sigma_safe))
 
 
 def fit_gp_model(runs_df: pd.DataFrame) -> Dict[str, object]:
@@ -93,24 +88,6 @@ def fit_gp_model(runs_df: pd.DataFrame) -> Dict[str, object]:
         "n_samples": int(len(clean)),
         "best_mse": float(np.min(y)),
     }
-
-
-def _normal_pdf(z: np.ndarray) -> np.ndarray:
-    return np.exp(-0.5 * np.square(z)) / math.sqrt(2.0 * math.pi)
-
-
-def _normal_cdf(z: np.ndarray) -> np.ndarray:
-    erf_vec = np.vectorize(math.erf)
-    return 0.5 * (1.0 + erf_vec(z / math.sqrt(2.0)))
-
-
-def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: float = 0.01) -> np.ndarray:
-    sigma_safe = np.maximum(sigma, 1e-12)
-    improvement = y_best - mu - xi
-    z = improvement / sigma_safe
-    ei = improvement * _normal_cdf(z) + sigma_safe * _normal_pdf(z)
-    ei[sigma <= 1e-12] = 0.0
-    return ei
 
 
 def suggest_next_params(
@@ -155,37 +132,8 @@ def suggest_next_params(
     }
 
 
-def save_json(path: str, payload: Dict[str, object]) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2)
-
-def parse_bounds(text: str) -> Tuple[float, float]:
-    
-    if not isinstance(text, str):
-        raise ValueError(f"Bounds must be a string, got: {type(text)}")
-
-    parts = [p.strip() for p in text.split(",")]
-
-    if len(parts) != 2:
-        raise ValueError(f"Invalid bounds format: '{text}'. Expected 'low,high'")
-
-    try:
-        lo = float(parts[0])
-        hi = float(parts[1])
-    except ValueError:
-        raise ValueError(f"Bounds must be numeric: '{text}'")
-
-    if lo >= hi:
-        raise ValueError(f"Invalid bounds '{text}': low must be < high")
-
-    return lo, hi
-
 def append_mae_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return a copy of df with a per-row absolute error column named 'mae'
-    """
+    """Return a copy of df with a per-row absolute error column named 'mae'."""
     required = {"temp", "temp_ref"}
     missing = required - set(df.columns)
     if missing:
@@ -201,8 +149,7 @@ def compute_tail_cost(
     entry_band: float = 2.0,
     overshoot_weight: float = 10.0,
 ) -> dict:
-    """
-    Compute tail cost after first entering a target band.
+    """Compute tail cost after first entering a target band.
 
     cost = tail_mae + overshoot_weight * overshoot^2
     """

@@ -27,7 +27,10 @@
       "target_temp": 0.0,
       "duration_s": 1193.1290287971497,
       "mid_mae": NaN,
-      "approach_speed": NaN
+      "approach_speed": NaN,
+      "weighted_approach_speed": NaN,
+      "brake_penalty": NaN,
+      "mean_brake_weight": NaN
     },
     {
       "run_id": "run_1777365346_4de8a777",
@@ -35,14 +38,16 @@
       "kp": 21.0,
       "ki": 263.0,
       "kd": 85.0,
-      "cost": 1489.5997460881044,
+      "cost": 14.270079596042848,
       "n_samples": 301,
       "start_temp": 28.140708923339844,
       "target_temp": 0.0,
       "duration_s": 1193.1290287971497,
       "tail_mae": 1.1778460661570231,
       "jitter_std": 0.31696469058745025,
-      "overshoot": 1.4877879706407726
+      "overshoot": 9.151717944634527,
+      "mean_sq_overshoot": 1.4877879706407726,
+      "max_overshoot": 1.712778091430664
     }
   ]
 }

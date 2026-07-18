@@ -18,7 +18,7 @@ from tcp.tcp_common import (
     publish_temp_ref_job,
     request_temperature_states,
 )
-from utils.bo_common import append_rows_csv, history_run_file, make_run_id
+from deepvac.artifacts import append_rows_csv, history_run_file, make_run_id
 from optimization import band_bo_gp as band_bo
 
 import argparse

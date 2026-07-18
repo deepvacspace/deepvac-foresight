@@ -2,7 +2,7 @@
 """Train, validate, tune, and test a one-step GRU plant model from history."""
 
 from __future__ import annotations
-from gru.utils import (
+from deepvac.datasets import (
     FEATURE_NAMES,
     build_prediction_details,
     build_sequences,

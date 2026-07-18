@@ -9,6 +9,8 @@ from typing import Dict, Iterable, Optional
 
 import pandas as pd
 
+from deepvac.artifacts import iter_run_dirs
+
 
 SAMPLE_FILE_NAMES = (
     "run_samples.csv"
@@ -44,15 +46,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Include subfolders that do not contain a recognized sample CSV.",
     )
     return ap
-
-
-def iter_run_dirs(history_root: Path) -> Iterable[Path]:
-    if not history_root.exists():
-        raise FileNotFoundError(f"History root does not exist: {history_root}")
-
-    for child in sorted(history_root.iterdir()):
-        if child.is_dir():
-            yield child
 
 
 def find_sample_file(run_dir: Path) -> Optional[Path]:

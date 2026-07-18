@@ -10,6 +10,8 @@ from typing import Dict, Iterable, Optional
 import numpy as np
 import pandas as pd
 
+from deepvac.artifacts import iter_run_dirs
+
 
 SAMPLE_FILE_NAMES = (
     "run_samples.csv"
@@ -48,15 +50,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--overshoot-weight", type=float, default=10.0)
     return ap
-
-
-def iter_run_dirs(history_root: Path) -> Iterable[Path]:
-    if not history_root.exists():
-        raise FileNotFoundError(f"History root does not exist: {history_root}")
-
-    for child in sorted(history_root.iterdir()):
-        if child.is_dir():
-            yield child
 
 
 def first_existing(run_dir: Path, names: tuple[str, ...]) -> Optional[Path]:

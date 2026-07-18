@@ -8,19 +8,46 @@ version = "0.1.0"
 description = "Digital-twin and PID optimization tools for the Deepvac chamber"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
-dependencies = [
-  "matplotlib==3.10.7",
-  "mlflow==3.10.1",
+# Only Python 3.10 is supported/validated (environment.yml pins 3.10.19).
+# The upper bound is deliberate: torch==2.12.0 and the sklearn-checkpoint
+# unpickling shim in gru/gru_common.py are only validated there.
+dependencies = []
+
+[project.optional-dependencies]
+# Chamber protocol, PID/BO helpers, and inference with an already-trained
+# GRU/LSTM checkpoint. See requirements/runtime.lock.txt for exact pins.
+runtime = [
   "numpy==2.2.6",
-  "optuna==4.7.0",
   "pandas==2.3.3",
   "scikit-learn==1.7.2",
-  "scipy==1.15.3",
   "torch==2.12.0",
 ]
+# Training new models: runtime + plotting, hyperparameter search, experiment
+# tracking. See requirements/training.lock.txt for exact pins.
+training = [
+  "deepvac[runtime]",
+  "matplotlib==3.10.7",
+  "mlflow==3.10.1",
+  "optuna==4.7.0",
+]
+# Plotting/analysis scripts only, without torch/scikit-learn. See
+# requirements/visualization.lock.txt for exact pins.
+visualization = [
+  "matplotlib==3.10.7",
+]
+# Test tooling. See requirements/dev.lock.txt for exact pins.
+dev = [
+  "pytest>=8.0",
+]
+all = [
+  "deepvac[training,visualization,dev]",
+]
+
+[project.scripts]
+deepvac = "deepvac.cli:main"
 
 [tool.setuptools]
-packages = ["gru", "lstm", "optimization", "tcp", "utils"]
+packages = ["deepvac", "gru", "lstm", "optimization", "tcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
