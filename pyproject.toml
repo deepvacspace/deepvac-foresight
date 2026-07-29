@@ -37,7 +37,10 @@ visualization = [
 ]
 # Test tooling. See requirements/dev.lock.txt for exact pins.
 dev = [
+  "deepvac[training,package]",
   "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
 ]
 # `deepvac package-model`'s ONNX export for control2-client (C++ Qt). See
 # requirements/package.lock.txt for exact pins.
@@ -58,4 +61,22 @@ packages = ["deepvac", "gru", "lstm", "optimization", "tcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -ra --strict-config --strict-markers"
+markers = [
+  "slow: trains a real (tiny) model or otherwise runs noticeably longer than the rest of the suite; excluded by default via addopts in CI, run explicitly with `pytest -m slow`",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["deepvac", "gru", "lstm", "optimization", "tcp", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# Legacy scripts (gru/, lstm/, optimization/) predate ruff adoption here and
+# are not being reformatted wholesale as part of adding tests -- new/shared
+# code (deepvac/, tests/) is held to the full rule set.
+[tool.ruff.lint.per-file-ignores]
+"gru/*.py" = ["E501"]
+"lstm/*.py" = ["E501"]
+"optimization/*.py" = ["E501"]

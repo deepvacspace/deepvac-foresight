@@ -1,4 +1,4 @@
-# Deepvac Sentinel
+# Deepvac Foresight
 
 Research and engineering toolkit for temperature control of a vacuum chamber.
 It communicates to a chamber controller over a TCP protocol, records
