@@ -9,7 +9,6 @@ importing them.
 from __future__ import annotations
 
 import math
-from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -17,7 +16,9 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.preprocessing import StandardScaler
 
-from deepvac.pid import parse_bounds  # noqa: F401  (re-exported for callers migrating off bo_common)
+from deepvac.pid import (
+    parse_bounds,  # noqa: F401  (re-exported for callers migrating off bo_common)
+)
 
 
 def normal_pdf(z: np.ndarray) -> np.ndarray:
@@ -54,7 +55,7 @@ def expected_information_gain(sigma: np.ndarray) -> np.ndarray:
     return 0.5 * np.log(2.0 * np.pi * np.e * np.square(sigma_safe))
 
 
-def fit_gp_model(runs_df: pd.DataFrame) -> Dict[str, object]:
+def fit_gp_model(runs_df: pd.DataFrame) -> dict[str, object]:
     required = ["kp", "ki", "kd", "mse"]
     missing = [c for c in required if c not in runs_df.columns]
     if missing:
@@ -91,12 +92,12 @@ def fit_gp_model(runs_df: pd.DataFrame) -> Dict[str, object]:
 
 
 def suggest_next_params(
-    model: Dict[str, object],
-    bounds: Dict[str, Tuple[float, float]],
+    model: dict[str, object],
+    bounds: dict[str, tuple[float, float]],
     n_candidates: int = 5000,
     xi: float = 0.01,
     random_state: int = 0,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     rng = np.random.default_rng(random_state)
 
     kp_lo, kp_hi = bounds["kp"]
@@ -190,10 +191,7 @@ def compute_tail_cost(
 
     dev = tail_temp - target
 
-    if direction > 0:
-        wrong_dev = np.maximum(0.0, -dev)
-    else:
-        wrong_dev = np.maximum(0.0, dev)
+    wrong_dev = np.maximum(0.0, -dev) if direction > 0 else np.maximum(0.0, dev)
 
     overshoot = float(np.max(wrong_dev)) if len(wrong_dev) else 0.0
 

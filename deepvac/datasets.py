@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import argparse
 import random
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 import numpy as np
 import pandas as pd
 import torch
@@ -49,8 +48,8 @@ def safe_numeric(series: pd.Series, default: float = 0.0) -> pd.Series:
     )
 
 
-def find_run_csvs(history_root: Path, telemetry_names: Sequence[str]) -> List[Path]:
-    found: List[Path] = []
+def find_run_csvs(history_root: Path, telemetry_names: Sequence[str]) -> list[Path]:
+    found: list[Path] = []
 
     if not history_root.exists():
         raise FileNotFoundError(f"History root does not exist: {history_root}")
@@ -87,7 +86,7 @@ def infer_elapsed_s(df: pd.DataFrame) -> pd.DataFrame:
 def prepare_run_dataframe(
     csv_path: Path,
     args: argparse.Namespace,
-) -> Tuple[pd.DataFrame, Dict[str, object]]:
+) -> tuple[pd.DataFrame, dict[str, object]]:
     run_id = csv_path.parent.name
     df = pd.read_csv(csv_path)
 
@@ -151,7 +150,7 @@ def build_sequences(
     df: pd.DataFrame,
     run_id: str,
     args: argparse.Namespace,
-) -> Tuple[np.ndarray, np.ndarray, pd.DataFrame]:
+) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     features = df[FEATURE_NAMES].to_numpy(dtype=np.float32)
     temp = df["temp"].to_numpy(dtype=np.float32)
     elapsed = df["elapsed_s"].to_numpy(dtype=np.float64)
@@ -165,9 +164,9 @@ def build_sequences(
             pd.DataFrame(),
         )
 
-    X_list: List[np.ndarray] = []
-    y_list: List[np.ndarray] = []
-    meta_rows: List[Dict[str, object]] = []
+    X_list: list[np.ndarray] = []
+    y_list: list[np.ndarray] = []
+    meta_rows: list[dict[str, object]] = []
 
     for end_idx in range(window_steps - 1, len(df) - 1):
         next_idx = end_idx + 1
@@ -215,7 +214,7 @@ def split_runs(
     train_fraction: float,
     val_fraction: float,
     seed: int,
-) -> Tuple[List[str], List[str], List[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     unique = sorted(set(str(r) for r in run_ids))
     if len(unique) < 3:
         raise RuntimeError("Need at least 3 valid runs for run-level train/val/test split.")
@@ -282,7 +281,7 @@ def compute_real_metrics(
     pred_scaled: np.ndarray,
     target_scaled: np.ndarray,
     y_scaler,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     pred_delta = y_scaler.inverse_transform(pred_scaled)
     target_delta = y_scaler.inverse_transform(target_scaled)
 
@@ -301,11 +300,11 @@ def predict_loader(
     loader: DataLoader,
     device: torch.device,
     loss_fn: nn.Module,
-) -> Tuple[np.ndarray, np.ndarray, float]:
+) -> tuple[np.ndarray, np.ndarray, float]:
     model.eval()
-    losses: List[float] = []
-    pred_batches: List[np.ndarray] = []
-    target_batches: List[np.ndarray] = []
+    losses: list[float] = []
+    pred_batches: list[np.ndarray] = []
+    target_batches: list[np.ndarray] = []
 
     with torch.no_grad():
         for xb, yb in loader:
@@ -358,7 +357,7 @@ def summarize_metrics_by_run(pred_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("mae_delta_t1").reset_index(drop=True)
 
 
-def plot_training_history(history_rows: Sequence[Dict[str, float]], output_path: Path) -> None:
+def plot_training_history(history_rows: Sequence[dict[str, float]], output_path: Path) -> None:
     if not history_rows:
         return
 
@@ -406,7 +405,7 @@ def plot_best_test_temperature(
     pred_df: pd.DataFrame,
     per_run_metrics: pd.DataFrame,
     output_path: Path,
-    tail_window_s: Optional[float] = None,
+    tail_window_s: float | None = None,
 ) -> None:
     if pred_df.empty or per_run_metrics.empty:
         return

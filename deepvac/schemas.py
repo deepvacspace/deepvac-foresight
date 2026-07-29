@@ -10,7 +10,6 @@ instead of being implicit in each script.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
 
 # One-step plant-model feature vector, in column order. Shared verbatim by
 # gru/gru_common.py, deepvac/datasets.py (training), and the GRU/LSTM MPC
@@ -33,9 +32,9 @@ DEFAULT_FEATURE_NAMES = [
 class PIDBounds:
     """Inclusive [min, max] bounds for one PID coefficient."""
 
-    kp: Tuple[float, float]
-    ki: Tuple[float, float]
-    kd: Tuple[float, float]
+    kp: tuple[float, float]
+    ki: tuple[float, float]
+    kd: tuple[float, float]
 
 
 @dataclass(frozen=True)

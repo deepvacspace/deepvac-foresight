@@ -22,15 +22,14 @@ import argparse
 import copy
 import math
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-
-from deepvac.pid import clip_pid, pid_bounds
 
 # ChamberPID/CodesysDiff are the physical PID/differentiator emulation used
 # by both the GRU and LSTM MPC schedulers; they live in gru.gru_common
@@ -38,8 +37,10 @@ from deepvac.pid import clip_pid, pid_bounds
 # GRU-specific. Imported here rather than re-implemented.
 from gru.gru_common import ChamberPID, CodesysDiff
 
-PredictFn = Callable[[Any, Dict[str, object], np.ndarray, torch.device], float]
-CostFn = Callable[..., Dict[str, float]]
+from deepvac.pid import clip_pid, pid_bounds
+
+PredictFn = Callable[[Any, dict[str, object], np.ndarray, torch.device], float]
+CostFn = Callable[..., dict[str, float]]
 
 
 @dataclass
@@ -224,7 +225,7 @@ def run_pid_substeps(
     period_s: float,
     feature_scale: float,
     temp_mode: str = "hold",
-) -> Dict[str, float]:
+) -> dict[str, float]:
     period = max(float(period_s), 1e-6)
     dt = max(float(dt_s), period)
     n_substeps = max(1, int(round(dt / period)))
@@ -273,7 +274,7 @@ def predict_next(
     *,
     predict_fn: PredictFn,
     model: Any,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_window: np.ndarray,
     feature_names: Sequence[str],
     device: torch.device,
@@ -281,11 +282,11 @@ def predict_next(
     previous_temp: float,
     temp_ref: float,
     dt_s: float,
-    terms: Dict[str, float],
+    terms: dict[str, float],
     kp: float,
     ki: float,
     kd: float,
-) -> Tuple[float, float, np.ndarray]:
+) -> tuple[float, float, np.ndarray]:
     local_window = feature_window.copy()
     local_window[-1, :] = make_feature_row(
         feature_names,
@@ -309,7 +310,7 @@ def step_state(
     *,
     state: SimState,
     model: Any,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_names: Sequence[str],
     device: torch.device,
     target_temp: float,
@@ -318,7 +319,7 @@ def step_state(
     feature_scale: float,
     max_abs_temp: float,
     predict_fn: PredictFn,
-) -> Tuple[SimState, Dict[str, float], bool, str]:
+) -> tuple[SimState, dict[str, float], bool, str]:
     terms = run_pid_substeps(
         pid=state.pid,
         diff=state.diff,
@@ -426,7 +427,7 @@ def candidate_feature_vector(
     ], dtype=float)
 
 
-def load_candidate_table(args: argparse.Namespace) -> Optional[CandidateTable]:
+def load_candidate_table(args: argparse.Namespace) -> CandidateTable | None:
     table_arg = str(getattr(args, "candidate_table", "") or "").strip()
     if not table_arg or int(getattr(args, "history_candidates", 0)) <= 0:
         return None
@@ -488,7 +489,7 @@ def select_history_candidates(
     *,
     state: SimState,
     args: argparse.Namespace,
-    candidate_table: Optional[CandidateTable],
+    candidate_table: CandidateTable | None,
 ) -> np.ndarray:
     if candidate_table is None or int(args.history_candidates) <= 0:
         return np.empty((0, 3), dtype=float)
@@ -524,7 +525,7 @@ def select_history_candidates(
     rank = distance[pool_idx] + float(args.history_score_weight) * score_norm
     ordered = pool_idx[np.argsort(rank)]
 
-    selected: List[np.ndarray] = []
+    selected: list[np.ndarray] = []
     seen = set()
     for idx in ordered:
         pid = clip_pid(candidate_table.pids[int(idx)], args)
@@ -573,20 +574,20 @@ def rollout_constant_pid(
     initial_state: SimState,
     candidate_pid: np.ndarray,
     model: Any,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_names: Sequence[str],
     device: torch.device,
     args: argparse.Namespace,
     horizon_steps: int,
     predict_fn: PredictFn,
     cost_fn: CostFn,
-) -> Tuple[Dict[str, float], List[float]]:
+) -> tuple[dict[str, float], list[float]]:
     # Important: deep-copy PID and diff so horizon rollouts do not mutate the real simulation state.
     state = copy.deepcopy(initial_state)
     pid_vec = clip_pid(candidate_pid, args)
     state.kp, state.ki, state.kd = float(pid_vec[0]), float(pid_vec[1]), float(pid_vec[2])
 
-    temps: List[float] = []
+    temps: list[float] = []
     valid = True
     for _ in range(horizon_steps):
         state, _, step_valid, _ = step_state(
@@ -646,16 +647,16 @@ def optimize_pid_for_state(
     *,
     state: SimState,
     model: Any,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_names: Sequence[str],
     device: torch.device,
     args: argparse.Namespace,
     rng: np.random.Generator,
     predict_fn: PredictFn,
     cost_fn: CostFn,
-    candidate_table: Optional[CandidateTable] = None,
+    candidate_table: CandidateTable | None = None,
     decision_idx: int | None = None,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     lo, hi = pid_bounds(args)
     current_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
     horizon_steps = max(1, int(math.ceil(float(args.mpc_horizon_s) / float(args.dt_s))))
@@ -696,7 +697,7 @@ def optimize_pid_for_state(
     if progress_enabled:
         print(f"[decision {decision_label}] baseline cost={current_cost:.4f}", flush=True)
 
-    evaluated_rows: List[Dict[str, float]] = []
+    evaluated_rows: list[dict[str, float]] = []
 
     if args.optimizer == "random":
         samples = sample_candidates_random(rng, population, args, center=current_pid)
@@ -754,7 +755,7 @@ def optimize_pid_for_state(
                 seed_start = 1
             inject_seed_candidates(samples, history_candidates, start_idx=seed_start)
 
-            iter_rows: List[Dict[str, float]] = []
+            iter_rows: list[dict[str, float]] = []
             best_cost_so_far = float("inf")
             best_pid_so_far = current_pid.copy()
             for i, sample in enumerate(samples):
@@ -844,7 +845,7 @@ def compute_final_metrics(
     args: argparse.Namespace,
     valid: bool,
     invalid_reason: str,
-) -> Dict[str, float | bool | str]:
+) -> dict[str, float | bool | str]:
     times = trajectory["elapsed_s"].to_numpy(dtype=float)
     temps = trajectory["temp"].to_numpy(dtype=float)
     target_temp = float(args.target_temp)
@@ -879,7 +880,7 @@ def compute_final_metrics(
         "time_to_near_s": float(times[int(near_idx[0])]) if len(near_idx) else float(args.duration_s) + 999.0,
         "time_to_settle_s": float(times[int(settle_idx[0])]) if len(settle_idx) else float(args.duration_s) + 999.0,
         "pid_changes": int(np.sum(
-            (trajectory[["kp", "ki", "kd"]].diff().abs().sum(axis=1).fillna(0.0).to_numpy() > 1e-9)
+            trajectory[["kp", "ki", "kd"]].diff().abs().sum(axis=1).fillna(0.0).to_numpy() > 1e-9
         )),
     }
 
@@ -887,15 +888,15 @@ def compute_final_metrics(
 def run_mpc_simulation(
     *,
     model: Any,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_names: Sequence[str],
     window_steps: int,
     device: torch.device,
     args: argparse.Namespace,
     predict_fn: PredictFn,
     cost_fn: CostFn,
-    candidate_table: Optional[CandidateTable] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, object]]:
+    candidate_table: CandidateTable | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     rng = np.random.default_rng(int(args.seed))
 
     start_temp = float(args.start_temp)
@@ -937,8 +938,8 @@ def run_mpc_simulation(
         kd=float(args.kd_init),
     )
 
-    trajectory_rows: List[Dict[str, float | int | bool | str]] = []
-    decision_rows: List[Dict[str, float | int | bool | str]] = []
+    trajectory_rows: list[dict[str, float | int | bool | str]] = []
+    decision_rows: list[dict[str, float | int | bool | str]] = []
     valid = True
     invalid_reason = ""
     step = 0
@@ -966,7 +967,7 @@ def run_mpc_simulation(
         new_pid = clip_pid(np.asarray([decision["kp"], decision["ki"], decision["kd"]], dtype=float), args)
         state.kp, state.ki, state.kd = float(new_pid[0]), float(new_pid[1]), float(new_pid[2])
 
-        decision_row: Dict[str, float | int | bool | str] = {
+        decision_row: dict[str, float | int | bool | str] = {
             "decision_idx": decision_idx,
             "elapsed_s": float(state.elapsed_s),
             "temp": float(state.temp),

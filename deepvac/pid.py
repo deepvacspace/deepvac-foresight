@@ -10,16 +10,16 @@ from __future__ import annotations
 
 import argparse
 import math
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import numpy as np
 
 from deepvac import protocol
 
-PIDTriplet = Tuple[int, int, int]
+PIDTriplet = tuple[int, int, int]
 
 
-def parse_bounds(text: str) -> Tuple[float, float]:
+def parse_bounds(text: str) -> tuple[float, float]:
     if not isinstance(text, str):
         raise ValueError(f"Bounds must be a string, got: {type(text)}")
 
@@ -30,8 +30,8 @@ def parse_bounds(text: str) -> Tuple[float, float]:
     try:
         lo = float(parts[0])
         hi = float(parts[1])
-    except ValueError:
-        raise ValueError(f"Bounds must be numeric: '{text}'")
+    except ValueError as exc:
+        raise ValueError(f"Bounds must be numeric: '{text}'") from exc
 
     if lo >= hi:
         raise ValueError(f"Invalid bounds '{text}': low must be < high")
@@ -44,7 +44,7 @@ def parse_bounds(text: str) -> Tuple[float, float]:
 # -----------------------------------------------------------------------------
 
 
-def pid_bounds(args: argparse.Namespace) -> Tuple[np.ndarray, np.ndarray]:
+def pid_bounds(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray]:
     """Read (kp_min, ki_min, kd_min) / (kp_max, ki_max, kd_max) off `args`."""
     lo = np.asarray([args.kp_min, args.ki_min, args.kd_min], dtype=float)
     hi = np.asarray([args.kp_max, args.ki_max, args.kd_max], dtype=float)
@@ -67,7 +67,7 @@ def clip_pid(x: np.ndarray, args: argparse.Namespace) -> np.ndarray:
 # -----------------------------------------------------------------------------
 
 
-def read_pid_from_tcp(row: int, args: Any) -> Dict[str, float]:
+def read_pid_from_tcp(row: int, args: Any) -> dict[str, float]:
     settings = protocol.request_settings(
         host=args.tcp_host,
         port=args.tcp_port,
@@ -109,12 +109,12 @@ def random_pid_band(args: Any, rng: Any, band: str) -> PIDTriplet:
     return kp, ki, kd
 
 
-def _schedule_pid(schedule: Tuple[int, ...], bands: Tuple[str, ...]) -> Dict[str, PIDTriplet]:
+def _schedule_pid(schedule: tuple[int, ...], bands: tuple[str, ...]) -> dict[str, PIDTriplet]:
     expected_len = len(bands) * 3
     if len(schedule) != expected_len:
         raise ValueError(f"Each PID_SCHEDULES entry must have {expected_len} numbers, got {len(schedule)}")
 
-    planned: Dict[str, PIDTriplet] = {}
+    planned: dict[str, PIDTriplet] = {}
     for idx, band in enumerate(bands):
         offset = idx * 3
         planned[band] = (
@@ -129,9 +129,9 @@ def plan_pid(
     run_idx: int,
     args: Any,
     rng: Any,
-    pid_schedules: list[Tuple[int, ...]],
-    bands: Tuple[str, ...],
-) -> Tuple[Dict[str, PIDTriplet], str]:
+    pid_schedules: list[tuple[int, ...]],
+    bands: tuple[str, ...],
+) -> tuple[dict[str, PIDTriplet], str]:
     if pid_schedules:
         schedule_idx = (run_idx - 1) % len(pid_schedules)
         return _schedule_pid(pid_schedules[schedule_idx], bands), f"schedule[{schedule_idx}]"

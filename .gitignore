@@ -9,6 +9,11 @@ __pycache__/
 /build/lib.*/
 /build/bdist.*/
 .venv-lock*/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
 
 /backup
 /readings
@@ -44,3 +49,6 @@ credentials.json
 /.claude
 
 /summary.txt
+
+# Internal dev doc, mirrored to Confluence -- not meant to be pushed
+/DEV_GUIDE.md
