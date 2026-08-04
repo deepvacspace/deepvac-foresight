@@ -52,3 +52,18 @@ credentials.json
 
 # Internal dev doc, mirrored to Confluence -- not meant to be pushed
 /DEV_GUIDE.md
+
+# Internal notes on model training/performance/export + AI Adviser Q&A -- not meant to be pushed
+/overview.md
+
+# Generated results
+/optimization/run_history/
+/optimization/best_old/
+/optimization/best_one_band/
+/optimization/best_three_band/
+/optimization/worst_run/
+/optimization/average_run/
+/gru/gru_ranked_pid_runs/
+/gru/mlruns/
+/gru/mpc_pid_runs/
+/gru/mpc_pid_runs_batch/
