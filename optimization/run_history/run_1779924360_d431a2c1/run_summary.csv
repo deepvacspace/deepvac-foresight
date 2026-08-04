@@ -1,2 +1,0 @@
-run_id,start_ts,end_ts,duration_s,num_samples,start_temp,temp_ref,pid_source,far_kp,far_ki,far_kd,mid_kp,mid_ki,mid_kd,near_kp,near_ki,near_kd,mse,mae,cost,tail_mae,overshoot
-run_1779924360_d431a2c1,1779924841.5459857,1779926041.2588453,1199.7128596305847,601,23.949857711791992,0.0,schedule[1],20,22,49,20,181,48,1,253,5,84.13107817252583,4.983734345833461,14.334261502220299,0.3132394849518199,1.1841039657592773
