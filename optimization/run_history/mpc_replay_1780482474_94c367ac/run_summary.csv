@@ -1,2 +1,0 @@
-run_id,start_ts,end_ts,duration_s,num_samples,start_temp,temp_ref,pid_source,pid_schedule_rows,pid_events_applied,final_kp,final_ki,final_kd,mse,mae,cost,tail_mae,overshoot
-mpc_replay_1780482474_94c367ac,1780482475.8673024,1780483713.8730435,1238.0057411193848,620,24.57208251953125,0.0,C:\Users\user\Desktop\deepvac\deepvac\gru\mpc_pid_runs\mpc_20260603_031732_74d01548\mpc_decisions.csv,60,60,1,183,2,137.35915742647853,7.0411679690884,18.879947459594835,0.37430588361028105,1.3603544235229492

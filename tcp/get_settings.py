@@ -1,13 +1,17 @@
+"""
 from tcp.tcp_common import (
         DEFAULT_HOST,
         DEFAULT_PORT,
         DEFAULT_TIMEOUT,
         request_settings
 )
+"""
 
-HOST = DEFAULT_HOST
-PORT = DEFAULT_PORT
-TIMEOUT = DEFAULT_TIMEOUT
+from tcp_common import request_settings
+
+HOST = "192.168.88.248" #DEFAULT_HOST
+PORT = 4321 #DEFAULT_PORT
+TIMEOUT = 5.0 #DEFAULT_TIMEOUT
 
 
 def main() -> None:

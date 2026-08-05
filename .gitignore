@@ -1,7 +1,5 @@
 __pycache__/
 
-# Python packaging/build artifacts (setuptools editable installs, wheel/sdist
-# builds, egg metadata).
 *.egg-info/
 .eggs/
 /dist/
@@ -9,6 +7,11 @@ __pycache__/
 /build/lib.*/
 /build/bdist.*/
 .venv-lock*/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
 
 /backup
 /readings
@@ -44,3 +47,24 @@ credentials.json
 /.claude
 
 /summary.txt
+
+/DEV_GUIDE.md
+/overview.md
+
+
+/optimization/average_run/
+/optimization/run_history/
+/optimization/best_old/
+/optimization/best_one_band/
+/optimization/best_three_band/
+/optimization/worst_run/
+/gru/gru_ranked_pid_runs/
+/gru/mlruns/
+/gru/mpc_pid_runs/
+/gru/mpc_pid_runs_batch
+/lstm/mpc_pid_runs/
+/lstm/mpc_pid_runs_batch/
+/lstm/old/
+/lstm/mlruns/
+
+/packaging
