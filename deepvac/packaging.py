@@ -154,7 +154,10 @@ def export_onnx(checkpoint_path: Path, model_type: ModelType, output_dir: Path) 
                 "input_shape": ["batch", window_steps, n_features],
                 "output_shape": ["batch", 1],
                 "output_meaning": "predicted temperature delta for the next step (temp[t+1] - temp[t]), degC",
-                "note": "Input/output scaling is already baked into the ONNX graph -- feed raw feature values, read back a raw degC delta.",
+                "note": (
+                    "Input/output scaling is already baked into the ONNX graph -- "
+                    "feed raw feature values, read back a raw degC delta."
+                ),
             },
             indent=2,
         ),
@@ -223,7 +226,6 @@ def _source_of(obj) -> str:
 def _generate_shared_block(model_type: ModelType) -> str:
     from deepvac import mpc as _mpc
     from deepvac.schemas import DEFAULT_FEATURE_NAMES
-    from gru import gru_common
 
     spec = get_model_spec(model_type)
     plant_model_class = spec.plant_model_class

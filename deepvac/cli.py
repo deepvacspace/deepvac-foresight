@@ -17,11 +17,10 @@ from __future__ import annotations
 
 import importlib
 import sys
-from typing import Dict, Tuple
 
 # command name -> (module to import, one-line description)
 # Grouped to match the module layout; run `deepvac --list` for the live list.
-COMMANDS: Dict[str, Tuple[str, str]] = {
+COMMANDS: dict[str, tuple[str, str]] = {
     # --- GRU digital twin --------------------------------------------------
     "train-gru": ("gru.train_gru", "Train/validate/tune/test the one-step GRU plant model."),
     "train-gru-multihorizon": ("gru.gru_multi_time", "Train/validate/test the multi-horizon GRU plant model."),
@@ -45,14 +44,14 @@ COMMANDS: Dict[str, Tuple[str, str]] = {
     # --- Bayesian optimization / AI advisor (optimization/) ----------------
     "optimize-training-loop": ("optimization.training_loop", "Closed-loop band-BO runner against the live chamber."),
     "optimize-band-bo": ("optimization.band_bo_gp", "Fit far/mid/near GP-BO models and suggest next PID candidates."),
-    "optimize-compute-model": ("optimization.compute_one_model", "Fit one GP-BO model over far/mid/near PID coefficients."),
+    "optimize-compute-model": ("optimization.compute_one_model", "Fit one GP-BO model over far/mid/near PID coeffs."),
     "optimize-random-pid": ("optimization.random_pid_tests", "Automated multi-run TCP tests with random PIDs."),
     "optimize-tocero-3band": ("optimization.tocero_3band", "Automated multi-run TCP tests, 3-band PID schedule."),
     "optimize-tocero-5band": ("optimization.tocero_5band", "Automated multi-run TCP tests, 5-band PID schedule."),
     "replay-gp": ("optimization.gp_experiment", "Replay one GRU-ranked GP decision schedule over TCP."),
-    "replay-gp-batch": ("optimization.batch_gp_experiment", "Replay multiple GRU-ranked GP decision schedules over TCP."),
+    "replay-gp-batch": ("optimization.batch_gp_experiment", "Replay multiple GRU-ranked GP decision schedules."),
     "replay-mpc": ("optimization.mpc_experiment", "Replay MPC PID decisions over TCP."),
-    "compare-advisor-improvement": ("optimization.ai_advisor_improvement", "Compare a baseline run against an AI-advisor run."),
+    "compare-advisor-improvement": ("optimization.ai_advisor_improvement", "Compare a baseline vs AI-advisor run."),
 
     # --- Analysis and reporting (optimization/) -----------------------------
     "list-runs": ("optimization.list_runs", "List/summarize run history, including NaN counts."),

@@ -17,22 +17,23 @@ import json
 import subprocess
 import time
 import uuid
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any
 
 
 def make_run_id(prefix: str = "run") -> str:
     return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
 
-def save_json(path: str, payload: Dict[str, object]) -> None:
+def save_json(path: str, payload: dict[str, object]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
 
 
-def append_rows_csv(path: str, rows: Iterable[Dict[str, object]]) -> None:
+def append_rows_csv(path: str, rows: Iterable[dict[str, object]]) -> None:
     rows = list(rows)
     if not rows:
         return
@@ -48,7 +49,7 @@ def append_rows_csv(path: str, rows: Iterable[Dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
-def append_row_csv(path: str, row: Dict[str, object]) -> None:
+def append_row_csv(path: str, row: dict[str, object]) -> None:
     """Like append_rows_csv, but aligns a single row to an existing file's
     header (missing columns become blank) instead of requiring an exact
     column match. Used where the row shape can grow between runs."""
@@ -134,8 +135,8 @@ def scenario_to_command(
     script: str,
     checkpoint: str,
     output_dir: str,
-    scenario: Dict[str, Any],
-) -> List[str]:
+    scenario: dict[str, Any],
+) -> list[str]:
     """Convert one scenario dictionary into a subprocess command."""
     cmd = [python_exe, script, "--checkpoint", checkpoint, "--output-dir", output_dir]
 
@@ -156,7 +157,7 @@ def scenario_to_command(
     return cmd
 
 
-def find_latest_summary(output_dir: Path, before_existing: set) -> Optional[Path]:
+def find_latest_summary(output_dir: Path, before_existing: set) -> Path | None:
     """Find the new mpc_summary.json created by the most recent run."""
     summaries = set(output_dir.glob("mpc_*/mpc_summary.json"))
     new_summaries = sorted(summaries - before_existing, key=lambda p: p.stat().st_mtime)
@@ -165,9 +166,9 @@ def find_latest_summary(output_dir: Path, before_existing: set) -> Optional[Path
     return new_summaries[-1]
 
 
-def flatten_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+def flatten_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Flatten an mpc_summary.json payload into one CSV row."""
-    row: Dict[str, Any] = {}
+    row: dict[str, Any] = {}
 
     row["run_id"] = summary.get("run_id")
     row["checkpoint"] = summary.get("checkpoint")
@@ -225,7 +226,7 @@ def add_selection_score(df):
     return df
 
 
-def run_batch_scenarios(*, args: Any, scenarios: List[Dict[str, Any]], label: str) -> None:
+def run_batch_scenarios(*, args: Any, scenarios: list[dict[str, Any]], label: str) -> None:
     """Run every scenario through `args.script` as a subprocess, collect each
     run's mpc_summary.json into one comparison CSV, and print the best runs.
 
@@ -236,7 +237,7 @@ def run_batch_scenarios(*, args: Any, scenarios: List[Dict[str, Any]], label: st
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
 
     print(f"=== Batch {label} + MPC PID runs ===")
     print(f"script:     {args.script}")
@@ -275,7 +276,7 @@ def run_batch_scenarios(*, args: Any, scenarios: List[Dict[str, Any]], label: st
             print(f"No summary found for scenario: {name}")
             continue
 
-        with open(summary_path, "r", encoding="utf-8") as f:
+        with open(summary_path, encoding="utf-8") as f:
             summary = json.load(f)
 
         row = flatten_summary(summary)
