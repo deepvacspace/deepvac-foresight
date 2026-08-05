@@ -4,7 +4,7 @@ import struct
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-DEFAULT_HOST = "172.0.30.10" #192.168.88.188 116 old 172.0.30.10
+DEFAULT_HOST = "192.168.88.248" #"172.0.30.10" #192.168.88.188 116 old 172.0.30.10
 DEFAULT_PORT = 4321
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_JOB_FLAGS = 3

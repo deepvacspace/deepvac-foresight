@@ -1,7 +1,5 @@
 __pycache__/
 
-# Python packaging/build artifacts (setuptools editable installs, wheel/sdist
-# builds, egg metadata).
 *.egg-info/
 .eggs/
 /dist/
@@ -50,20 +48,23 @@ credentials.json
 
 /summary.txt
 
-# Internal dev doc, mirrored to Confluence -- not meant to be pushed
 /DEV_GUIDE.md
-
-# Internal notes on model training/performance/export + AI Adviser Q&A -- not meant to be pushed
 /overview.md
 
-# Generated results
+
+/optimization/average_run/
 /optimization/run_history/
 /optimization/best_old/
 /optimization/best_one_band/
 /optimization/best_three_band/
 /optimization/worst_run/
-/optimization/average_run/
 /gru/gru_ranked_pid_runs/
 /gru/mlruns/
 /gru/mpc_pid_runs/
-/gru/mpc_pid_runs_batch/
+/gru/mpc_pid_runs_batch
+/lstm/mpc_pid_runs/
+/lstm/mpc_pid_runs_batch/
+/lstm/old/
+/lstm/mlruns/
+
+/packaging

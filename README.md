@@ -159,7 +159,7 @@ unchanged -- `deepvac train-gru --help` is identical to
 deepvac --list                 # every subcommand with a one-line description
 deepvac train-gru --help
 deepvac mpc-lstm --checkpoint lstm\validation_t1\lstm_t1.pt --cpu --duration-s 600
-deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt --target insight,control2-client
+deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt
 ```
 
 Running scripts directly as modules (`python -m gru.train_gru --help`) still
@@ -226,36 +226,48 @@ candidates to `optimization\output\band_bo_next_params.json` -- this only
 
 ## Packaging a model for the desktop apps
 
-`deepvac package-model` (`deepvac/packaging.py`) hands a trained checkpoint
-off to whichever of the two downstream desktop apps, assuming the
-default sibling-directory layout `<root>/deepvac/scripts` (this repo),
-`<root>/deepvac/insight`, `<root>/control2-client`. Requires the
-`package` extra (`pip install -e ".[package]" -r requirements\package.lock.txt`).
+`deepvac package-model` (`deepvac/packaging.py`) stages a trained checkpoint
+for both downstream desktop apps into a local `packaging/` folder -- it never
+writes into either app's checkout directly. Requires the `package` extra
+(`pip install -e ".[package]" -r requirements\package.lock.txt`).
 
 ```powershell
-deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt --target insight,control2-client
+deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt
 ```
 
-- **`insight`** (PySide6, GRU only): copies the checkpoint to
-  `insight/app/model/model.pt` and regenerates the shared plant-model
-  primitives in `insight/app/model/simulation.py` from this repo's
-  `deepvac/mpc.py` + `gru/gru_common.py` (everything above the
-  `# === END GENERATED ===` marker in that file). The Simulator view's own
-  logic below that marker (`simulate_candidate`, `compute_metrics`) is
-  hand-maintained in the `insight` repo and is left untouched.
+Every run stages both outputs side by side, ready to move by hand:
+
+```
+packaging/
+  insight/            -> copy into <insight checkout>/app/model/
+    model.pt
+    simulation.py
+  control2-client/    -> copy into <control2-client checkout>/data/model/
+    {gru,lstm}_plant_model.onnx
+    {gru,lstm}_plant_model.json
+```
+
+- **`insight`** (PySide6): stages `model.pt` plus a regenerated
+  `simulation.py` whose shared plant-model block is regenerated from this
+  repo's `deepvac/mpc.py` + the checkpoint's model class (everything above
+  the `# === END GENERATED ===` marker). `--insight-root` (default
+  `<root>/deepvac/insight`) is only ever **read** -- it's how the Simulator
+  view's hand-maintained logic below that marker (`simulate_candidate`,
+  `compute_metrics`) gets carried forward into the newly generated file.
+  Pass `--skip insight` to opt out of needing that checkout at all.
 - **`control2-client`** (C++ Qt): that app has no ONNX Runtime or LibTorch
   linked yet, so this exports a self-contained ONNX graph -- scaling is
   baked in, so the C++ side feeds a raw feature window and reads back a raw
   temperature delta (°C) with no need to reimplement the checkpoint's
-  `StandardScaler` -- to `control2-client/data/model/{gru,lstm}_plant_model.onnx`,
-  plus a `.json` sidecar describing the expected input shape and feature
-  order. `deepvac package-model` verifies the exported graph numerically
-  against the original PyTorch model before reporting success (pass
-  `--no-verify-onnx` to skip). Actually loading that ONNX file from
-  `control2-client`'s C++ code (wiring ONNX Runtime C++ into its CMake
-  build) is separate follow-up work in that repo.
+  `StandardScaler`. `deepvac package-model` verifies the exported graph
+  numerically against the original PyTorch model before reporting success
+  (pass `--no-verify-onnx` to skip).
 
-`--model-type gru|lstm` is inferred from the checkpoint path when omitted
-(whichever of `gru`/`lstm` appears as a path component); pass it explicitly
-if that's ambiguous. `--target insight` requires `--model-type gru` --
-`insight/app/model/simulation.py` is hard-typed to `GRUModel`.
+Model types are registered in `deepvac/model_registry.py` (currently `gru`,
+`lstm`); `--model-type` is only needed to override the default resolution
+order: the checkpoint's own stamped `model_family` field first, then
+(for older checkpoints saved before that field existed) whichever
+registered type name appears as a path component. Use `--latest DIR`
+instead of `--checkpoint` to auto-pick the newest `*.pt` under a directory.
+`--output-dir` overrides where `packaging/` is created (default: current
+directory).

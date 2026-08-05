@@ -449,6 +449,7 @@ def train_model(
     if checkpoint_path is not None:
         checkpoint = {
             "model_state_dict": best_state_dict,
+            "model_family": "gru",
             "feature_names": FEATURE_NAMES,
             "input_dim": len(FEATURE_NAMES),
             "output_dim": 1,
