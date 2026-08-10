@@ -40,7 +40,8 @@ PIDTriplet = Tuple[int, int, int]
 
 def build_arg_parser() -> argparse.ArgumentParser:
     output_dir = Path(__file__).with_name("output")
-    ap = band_bo.build_arg_parser()
+    # run_band_test() below hardcodes the far/mid/near crossings, so pin the BO to 3 bands.
+    ap = band_bo.build_arg_parser(band_mode=3)
     ap.description = "Closed-loop runner using band_gp_bo three-model scheduling."
     ap.set_defaults(
         telemetry_names=["run_samples.csv"],
@@ -463,6 +464,11 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-consecutive-failures must be > 0")
     if args.cross_band_2 > args.cross_band_1:
         raise ValueError("--cross-band-2 should be <= --cross-band-1")
+    if int(args.band_mode) != 3:
+        raise ValueError(
+            "training_loop only drives far/mid/near. For 5 bands run "
+            "optimization.tocero_5band and optimization.band_bo_gp --band-mode 5."
+        )
 
 
 def main() -> None:

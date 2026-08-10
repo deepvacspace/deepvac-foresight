@@ -43,11 +43,12 @@ COMMANDS: dict[str, tuple[str, str]] = {
 
     # --- Bayesian optimization / AI advisor (optimization/) ----------------
     "optimize-training-loop": ("optimization.training_loop", "Closed-loop band-BO runner against the live chamber."),
-    "optimize-band-bo": ("optimization.band_bo_gp", "Fit far/mid/near GP-BO models and suggest next PID candidates."),
+    "optimize-band-bo": ("optimization.band_bo_gp", "Fit per-band GP-BO models (--band-mode 3|5) and suggest next PID candidates."),
     "optimize-compute-model": ("optimization.compute_one_model", "Fit one GP-BO model over far/mid/near PID coeffs."),
     "optimize-random-pid": ("optimization.random_pid_tests", "Automated multi-run TCP tests with random PIDs."),
     "optimize-tocero-3band": ("optimization.tocero_3band", "Automated multi-run TCP tests, 3-band PID schedule."),
     "optimize-tocero-5band": ("optimization.tocero_5band", "Automated multi-run TCP tests, 5-band PID schedule."),
+    "optimize-tocero-gp-mpc": ("optimization.tocero_gp_mpc", "Live run: GP far-band PID, then GRU+MPC replanning inside the band."),
     "replay-gp": ("optimization.gp_experiment", "Replay one GRU-ranked GP decision schedule over TCP."),
     "replay-gp-batch": ("optimization.batch_gp_experiment", "Replay multiple GRU-ranked GP decision schedules."),
     "replay-mpc": ("optimization.mpc_experiment", "Replay MPC PID decisions over TCP."),

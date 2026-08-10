@@ -15,8 +15,9 @@ independent supervisory interlock, confirmation prompt, or emergency stop
 built into any of them.
 
 - `optimization/mpc_experiment.py`, `gp_experiment.py`, `tocero_3band.py`,
-  `tocero_5band.py`, `random_pid_tests.py`, and `training_loop.py` all write
-  PID values over TCP.
+  `tocero_5band.py`, `tocero_gp_mpc.py`, `random_pid_tests.py`, and
+  `training_loop.py` all write PID values over TCP. `tocero_gp_mpc.py` accepts
+  `--dry-run` to exercise its full schedule without writing anything.
 - Anything under `gru/`, `lstm/`, and `deepvac/mpc.py` that reads
   "simulation"/"MPC scheduler" runs entirely offline against a trained
   neural-network plant model.
@@ -222,6 +223,44 @@ python -m optimization.band_bo_gp --history-root optimization\run_history
 Fits far/mid/near GP models to `run_history/` and writes suggested next PID
 candidates to `optimization\output\band_bo_next_params.json` -- this only
 *suggests* values, it does not write anything to the chamber.
+
+`--band-mode 5` fits the five-band layout instead
+(`very_far`/`far`/`mid`/`near`/`very_near`), matching
+`optimization\tocero_5band.py`:
+
+```powershell
+python -m optimization.band_bo_gp --band-mode 5 --history-root optimization\history_5_bands
+```
+
+The analysis band boundaries must line up with the runner's crossings, or a
+band's samples get attributed to the wrong PID triplet. The defaults already
+match (`10,3` for 3 bands, `12,8,5,1` for 5); if you change the runner's
+`--cross-band-N` values, pass the same numbers to `--band-thresholds`.
+
+Either mode writes a ready-to-paste `PID_SCHEDULES` block to
+`optimization\output\band_bo_candidate_combinations.txt` -- 9-wide tuples for
+`tocero_3band.py`, 15-wide for `tocero_5band.py`. Paste it into the matching
+runner's `PID_SCHEDULES` to execute the suggestions, then re-run the fit.
+`optimization\training_loop.py` automates that cycle for 3 bands only.
+
+### 4. Two-phase live control: GP far band, then GRU+MPC (writes to the chamber)
+
+```powershell
+python -m optimization.tocero_gp_mpc --duration-s 1800 --target-temp 0 --far-band 10 --mpc-hold-s 5 --dry-run
+```
+A single far band: while `abs(temp - target) > --far-band` the run holds one PID
+triplet chosen by the far-band GP from `--gp-history-root`. From the first sample
+inside the band, the GRU plant model plus MPC re-infer the PID every
+`--mpc-hold-s` seconds and write each decision to the chamber. Drop `--dry-run`
+to actually drive the chamber.
+
+MPC decisions are scored with `deepvac/mpc_batch.py`, which evaluates the whole
+candidate population in one batched GRU forward. The scalar `deepvac/mpc.py` path
+costs ~281 s for a default CEM decision on CPU and cannot hold a 5 s cadence;
+batched, the same decision is ~3-4 s. If a decision still overruns, CEM stops
+early at `--mpc-time-budget-s` (default 60% of the hold) and the run reports
+`mpc_overruns`. `--mpc-hold-s` should be a whole multiple of `--dt-s`, since
+decisions can only fire on a sampling tick.
 
 
 ## Packaging a model for the desktop apps
