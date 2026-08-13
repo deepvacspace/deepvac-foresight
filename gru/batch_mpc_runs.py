@@ -2,10 +2,8 @@
 """
 Batch runner for mpc_gru.py.
 
-Batch orchestration (command construction, summary discovery/flattening,
-result ranking) is shared with lstm/batch_mpc_runs.py via
-deepvac.artifacts.run_batch_scenarios; this file only defines the GRU-MPC
-scenario matrix and this script's own defaults.
+Defines the GRU-MPC scenario matrix and this script's defaults; the batch
+orchestration itself is deepvac.artifacts.run_batch_scenarios.
 """
 
 from __future__ import annotations

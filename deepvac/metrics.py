@@ -1,10 +1,4 @@
-"""Cost functions and Bayesian-optimization acquisition math.
-
-Consolidates utils/bo_common.py (the single import path all of optimization/
-already agreed on) with optimization/band_bo_gp.py, which had copy-pasted
-normal_pdf/normal_cdf/expected_improvement/parse_bounds/save_json instead of
-importing them.
-"""
+"""Cost functions and Bayesian-optimization acquisition math."""
 
 from __future__ import annotations
 

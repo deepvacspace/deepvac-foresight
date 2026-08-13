@@ -13,11 +13,9 @@ mpc        Model-predictive-control rollout/optimization loop shared by the
            GRU and LSTM MPC schedulers.
 artifacts  Run-id/CSV/JSON persistence helpers for experiment output.
 
-gru/, lstm/, optimization/, and tcp/ remain the executable entry points and
-own their output directories (validation_t1/, plots_t1/, mlruns/,
-run_history/, etc, each resolved relative to the script's own file location).
-This package holds the logic that used to be duplicated or inconsistently
-imported across those packages.
+gru/, lstm/, optimization/, and tcp/ are the executable entry points and own
+their output directories (validation_t1/, plots_t1/, mlruns/, run_history/,
+etc, each resolved relative to the script's own file location).
 """
 
 __version__ = "0.1.0"

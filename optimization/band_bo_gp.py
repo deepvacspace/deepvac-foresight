@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-Compute band-specific metrics and costs for each run using three Gaussian Process models
+Compute band-specific metrics and costs for each run using one Gaussian Process model per band.
+
+--band-mode 3 (default) gives far/mid/near, matching optimization/tocero_3band.py.
+--band-mode 5 gives very_far/far/mid/near/very_near, matching optimization/tocero_5band.py.
+
+Each band gets a role from its position: the outermost band is scored on how fast
+it closes the error, the innermost on how well it settles, and every band between
+them on how progressively it brakes. The band boundaries must match the runner's
+--cross-band-N crossings so that each band's samples come from exactly one PID triplet.
 """
 
 from __future__ import annotations
@@ -28,16 +36,216 @@ from deepvac.metrics import (
 )
 from deepvac.artifacts import iter_run_dirs, save_json
 
-BANDS = ("far", "mid", "near")
+BANDS_3 = ("far", "mid", "near")
+BANDS_5 = ("very_far", "far", "mid", "near", "very_near")
+
+BANDS = BANDS_3
+
+BAND_SCHEMES: Dict[int, Tuple[str, ...]] = {3: BANDS_3, 5: BANDS_5}
+
+# Band boundaries, outermost first. Mirror the --cross-band-N crossings in
+# optimization/tocero_3band.py and optimization/tocero_5band.py.
+DEFAULT_THRESHOLDS: Dict[int, Tuple[float, ...]] = {
+    3: (10.0, 3.0),
+    5: (12.0, 8.0, 5.0, 1.0),
+}
+
+# How many ranked candidates per band feed the exported PID_SCHEDULES product.
+DEFAULT_COMBO_TOP_K: Dict[int, Tuple[int, ...]] = {
+    3: (1, 3, 3),
+    5: (1, 1, 2, 2, 2),
+}
+
+# The outermost band gets down to the setpoint fast, the innermost one settles,
+# everything between them brakes.
+ROLE_APPROACH = "approach"
+ROLE_BRAKE = "brake"
+ROLE_SETTLE = "settle"
+
+# Column aliases read out of band_metrics.csv by gru/.
+LEGACY_METRIC_ALIASES: Dict[str, Dict[str, str]] = {
+    ROLE_APPROACH: {"band_mae": "far_mae", "time_to_exit_band": "time_to_reach_mid_band"},
+    ROLE_BRAKE: {"band_mae": "mid_mae"},
+}
+
 OUTPUT_DIR = Path(__file__).with_name("output")
 COEF_COLS = ("kp", "ki", "kd")
 FEATURE_COLS = ("kp", "ki", "kd", "start_temp", "target_temp")
 REQUIRED_COLS = ("timestamp", "kp", "ki", "kd", "temp", "temp_ref")
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
+def band_roles(bands: Tuple[str, ...]) -> Dict[str, str]:
+    if len(bands) < 3:
+        raise ValueError(f"Need at least 3 bands, got {bands!r}")
+
+    roles = {band: ROLE_BRAKE for band in bands}
+    roles[bands[0]] = ROLE_APPROACH
+    roles[bands[-1]] = ROLE_SETTLE
+    return roles
+
+
+ROLE_WEIGHT_SUFFIXES: Dict[str, Tuple[str, ...]] = {
+    ROLE_APPROACH: ("mae_weight", "time_weight"),
+    ROLE_BRAKE: (
+        "mae_weight",
+        "slope_weight",
+        "brake_power",
+        "brake_speed_target",
+        "brake_min_weight",
+    ),
+    ROLE_SETTLE: (
+        "tail_mae_weight",
+        "jitter_weight",
+        "overshoot_weight",
+        "max_overshoot_weight",
+    ),
+}
+
+
+def band_flag(band: str, suffix: str) -> str:
+    return f"--{band.replace('_', '-')}-{suffix}"
+
+
+def band_attr(args: argparse.Namespace, band: str, suffix: str) -> float:
+    return float(getattr(args, f"{band}_{suffix.replace('-', '_')}"))
+
+
+def band_weight_summary(args: argparse.Namespace, band: str, role: str) -> Dict[str, float]:
+    return {
+        suffix: band_attr(args, band, suffix)
+        for suffix in ROLE_WEIGHT_SUFFIXES[role]
+    }
+
+
+def resolve_band_mode(argv: Optional[List[str]] = None) -> int:
+    """Read --band-mode before the full parser exists, since the per-band flags depend on it."""
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--band-mode", type=int, choices=sorted(BAND_SCHEMES), default=3)
+    known, _ = pre.parse_known_args(argv)
+    return int(known.band_mode)
+
+
+def resolve_bands(args: argparse.Namespace) -> Tuple[str, ...]:
+    return BAND_SCHEMES[int(getattr(args, "band_mode", 3))]
+
+
+def resolve_thresholds(args: argparse.Namespace) -> Tuple[float, ...]:
+    bands = resolve_bands(args)
+    raw = getattr(args, "band_thresholds", None)
+
+    if raw:
+        values = tuple(float(p.strip()) for p in str(raw).split(",") if p.strip())
+    elif len(bands) == 3:
+        values = (float(args.far_threshold), float(args.near_threshold))
+    else:
+        values = DEFAULT_THRESHOLDS[len(bands)]
+
+    if len(values) != len(bands) - 1:
+        raise ValueError(
+            f"--band-thresholds needs {len(bands) - 1} values for {len(bands)} bands, got {len(values)}"
+        )
+    if any(a <= b for a, b in zip(values, values[1:])):
+        raise ValueError(f"--band-thresholds must be strictly decreasing, got {values}")
+    if values[-1] <= 0:
+        raise ValueError(f"--band-thresholds must be positive, got {values}")
+
+    return values
+
+
+def resolve_combo_top_k(args: argparse.Namespace) -> Tuple[int, ...]:
+    bands = resolve_bands(args)
+    raw = getattr(args, "combo_top_k", None)
+
+    if raw:
+        values = tuple(int(p.strip()) for p in str(raw).split(",") if p.strip())
+    else:
+        values = DEFAULT_COMBO_TOP_K[len(bands)]
+
+    if len(values) != len(bands):
+        raise ValueError(
+            f"--combo-top-k needs {len(bands)} values for {len(bands)} bands, got {len(values)}"
+        )
+    if any(v < 1 for v in values):
+        raise ValueError(f"--combo-top-k values must be >= 1, got {values}")
+
+    return values
+
+
+def add_band_arguments(ap: argparse.ArgumentParser, bands: Tuple[str, ...]) -> None:
+    roles = band_roles(bands)
+
+    for band in bands:
+        ap.add_argument(band_flag(band, "kp-bounds"), default="1,20")
+        ap.add_argument(band_flag(band, "ki-bounds"), default="1,1000")
+        ap.add_argument(band_flag(band, "kd-bounds"), default="1,50")
+
+        role = roles[band]
+        if role == ROLE_APPROACH:
+            ap.add_argument(band_flag(band, "mae-weight"), type=float, default=0.5)
+            ap.add_argument(band_flag(band, "time-weight"), type=float, default=0.03)
+        elif role == ROLE_BRAKE:
+            ap.add_argument(band_flag(band, "mae-weight"), type=float, default=0.5)
+            ap.add_argument(band_flag(band, "slope-weight"), type=float, default=10.0)
+            ap.add_argument(
+                band_flag(band, "brake-power"),
+                type=float,
+                default=2.0,
+                help=(
+                    "Progressive braking curve across the braking region. "
+                    "1.0 = linear, 2.0 = quadratic, 3.0 = stronger braking near the settling band."
+                ),
+            )
+            ap.add_argument(
+                band_flag(band, "brake-speed-target"),
+                type=float,
+                default=0.003,
+                help=(
+                    "Allowed abs-error reduction speed in deg/s before the braking penalty starts. "
+                    "Lower values make the controller brake earlier/slower."
+                ),
+            )
+            ap.add_argument(
+                band_flag(band, "brake-min-weight"),
+                type=float,
+                default=0.10,
+                help=(
+                    "Minimum braking weight at the outer edge of the braking region. "
+                    "Keeps braking active from the first braking band onward."
+                ),
+            )
+        else:
+            ap.add_argument(band_flag(band, "tail-mae-weight"), type=float, default=3.0)
+            ap.add_argument(band_flag(band, "jitter-weight"), type=float, default=5.0)
+            ap.add_argument(band_flag(band, "overshoot-weight"), type=float, default=5.0)
+            ap.add_argument(
+                band_flag(band, "max-overshoot-weight"),
+                type=float,
+                default=1.0,
+                help=(
+                    "Soft settling-band max-overshoot penalty. "
+                    "This improves overshoot preference without making crossing a hard constraint."
+                ),
+            )
+
+
+def build_arg_parser(band_mode: Optional[int] = None) -> argparse.ArgumentParser:
+    if band_mode is None:
+        band_mode = resolve_band_mode()
+    bands = BAND_SCHEMES[int(band_mode)]
+
     ap = argparse.ArgumentParser(
-        description="Train separate GP BO models for far/mid/near PID coefficient triplets."
+        description=(
+            "Train separate GP BO models for each band's PID coefficient triplet "
+            f"({'/'.join(bands)})."
+        )
+    )
+
+    ap.add_argument(
+        "--band-mode",
+        type=int,
+        choices=sorted(BAND_SCHEMES),
+        default=int(band_mode),
+        help="3 = far/mid/near (tocero_3band), 5 = very_far/far/mid/near/very_near (tocero_5band).",
     )
 
     ap.add_argument("--history-root", default="run_history",
@@ -66,74 +274,39 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="LCB exploration parameter. Higher = more exploration, lower = more exploitation.",
     )
 
-    ap.add_argument("--far-threshold", type=float, default=10.0)
-    ap.add_argument("--near-threshold", type=float, default=3.0)
+    ap.add_argument(
+        "--band-thresholds",
+        default=None,
+        help=(
+            "Comma-separated band boundaries, outermost first "
+            f"({len(bands) - 1} values). Defaults to "
+            f"'{','.join(format(t, 'g') for t in DEFAULT_THRESHOLDS[len(bands)])}'. "
+            "These should match the runner's --cross-band-N values."
+        ),
+    )
+    if len(bands) == 3:
+        # Alternative spelling of --band-thresholds for 3-band invocations.
+        ap.add_argument("--far-threshold", type=float, default=10.0)
+        ap.add_argument("--near-threshold", type=float, default=3.0)
 
     ap.add_argument("--min-band-samples", type=int, default=8)
 
-    ap.add_argument("--far-mae-weight", type=float, default=0.5)
-    ap.add_argument("--far-time-weight", type=float, default=0.03)
-
-    ap.add_argument("--mid-mae-weight", type=float, default=0.5)
-    ap.add_argument("--mid-slope-weight", type=float, default=10.0)
-    ap.add_argument(
-        "--mid-brake-power",
-        type=float,
-        default=2.0,
-        help=(
-            "Progressive braking curve inside the mid band. "
-            "1.0 = linear, 2.0 = quadratic, 3.0 = stronger braking near the near band."
-        ),
-    )
-    ap.add_argument(
-        "--mid-brake-speed-target",
-        type=float,
-        default=0.003,
-        help=(
-            "Allowed abs-error reduction speed in deg/s before mid-band braking penalty starts. "
-            "Lower values make the controller brake earlier/slower."
-        ),
-    )
-    ap.add_argument(
-        "--mid-brake-min-weight",
-        type=float,
-        default=0.10,
-        help=(
-            "Minimum braking weight at the beginning of the mid band. "
-            "Keeps braking active from the far/mid boundary instead of only near the near band."
-        ),
-    )
-
-    ap.add_argument("--near-tail-mae-weight", type=float, default=3.0) # 2
-    ap.add_argument("--near-jitter-weight", type=float, default=5.0)    # 0
-    ap.add_argument("--near-overshoot-weight", type=float, default=5.0) # 10
-    ap.add_argument(
-        "--near-max-overshoot-weight",
-        type=float,
-        default=1.0,
-        help=(
-            "Soft near-band max-overshoot penalty. "
-            "This improves overshoot preference without making crossing a hard constraint."
-        ),
-    )
+    add_band_arguments(ap, bands)
 
     ap.add_argument("--tail-seconds", type=float, default=300.0)
-
-    ap.add_argument("--far-kp-bounds", default="1,20")      #5 - 10
-    ap.add_argument("--far-ki-bounds", default="1,1000")  #850 - 1000
-    ap.add_argument("--far-kd-bounds", default="1,50")      #0 - 20
-
-    ap.add_argument("--mid-kp-bounds", default="1,20")     #14 - 24
-    ap.add_argument("--mid-ki-bounds", default="1,1000")   #180 - 750
-    ap.add_argument("--mid-kd-bounds", default="1,50")    #40 - 110
-
-    ap.add_argument("--near-kp-bounds", default="1,20")    #14 - 24
-    ap.add_argument("--near-ki-bounds", default="1,1000")   #60 - 180
-    ap.add_argument("--near-kd-bounds", default="1,50")    #10 - 80
 
     ap.add_argument("--n-candidates", type=int, default=100000)
     ap.add_argument("--top-k", type=int, default=3,
                     help="Number of ranked candidates to save per band.")
+    ap.add_argument(
+        "--combo-top-k",
+        default=None,
+        help=(
+            f"Comma-separated per-band candidate counts ({len(bands)} values) whose product "
+            "becomes the exported PID_SCHEDULES. Defaults to "
+            f"'{','.join(str(k) for k in DEFAULT_COMBO_TOP_K[len(bands)])}'."
+        ),
+    )
     ap.add_argument("--suggest-start-temp", type=float, default=None,
                     help="Start temperature context for the next-test suggestion. Defaults to median observed start_temp.")
     ap.add_argument("--suggest-target-temp", type=float, default=None,
@@ -153,29 +326,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return ap
 
 
-# EI/LCB/EIG acquisition, parse_bounds, and save_json now come from
-# deepvac.metrics / deepvac.artifacts (see imports above) instead of being
-# defined here -- they were copy-pasted duplicates of utils/bo_common.py.
-
-
 def format_number(value: object) -> str:
     return str(int(round(float(value))))
 
 
-def candidate_combination_lines(suggestions: Dict[str, Dict[str, object]]) -> List[str]:
+def candidate_combination_lines(
+    suggestions: Dict[str, Dict[str, object]],
+    bands: Tuple[str, ...],
+    top_by_band: Tuple[int, ...],
+) -> List[str]:
+    """Render the ranked per-band candidates as a PID_SCHEDULES block, outermost band first.
+
+    The tuple width is 3 * len(bands), which is what deepvac.pid._schedule_pid expects
+    from the matching runner (9 for tocero_3band, 15 for tocero_5band).
+    """
     lines: List[str] = ["PID_SCHEDULES = ["]
     ranked_by_band = [
-        suggestions["far"]["top_candidates"][:1],
-        suggestions["mid"]["top_candidates"][:3],
-        suggestions["near"]["top_candidates"][:3],
+        suggestions[band]["top_candidates"][:count]
+        for band, count in zip(bands, top_by_band)
     ]
 
-    for far, mid, near in product(*ranked_by_band):
-        values = (
-            far["kp"], far["ki"], far["kd"],
-            mid["kp"], mid["ki"], mid["kd"],
-            near["kp"], near["ki"], near["kd"],
-        )
+    for combination in product(*ranked_by_band):
+        values = [
+            candidate[coef]
+            for candidate in combination
+            for coef in COEF_COLS
+        ]
         lines.append("    (" + ", ".join(format_number(v) for v in values) + "),")
 
     lines.append("]")
@@ -295,16 +471,42 @@ def load_telemetry(csv_path: Path) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def classify_bands(df: pd.DataFrame, far_threshold: float, near_threshold: float) -> pd.DataFrame:
+def classify_bands(
+    df: pd.DataFrame,
+    bands: Tuple[str, ...],
+    thresholds: Tuple[float, ...],
+) -> pd.DataFrame:
+    """Label each sample with the band whose PID triplet was active when it was taken.
+
+    With bands b0..bn-1 (outermost first) and boundaries t0 > t1 > ... > tn-2:
+      b0        : abs_error > t0
+      bi        : t_i < abs_error <= t_i-1
+      b_{n-1}   : abs_error <= t_n-2
+    """
+    if len(thresholds) != len(bands) - 1:
+        raise ValueError(
+            f"Expected {len(bands) - 1} thresholds for bands {bands!r}, got {thresholds!r}"
+        )
+
     out = df.copy()
     out["error"] = signed_error(out)
     out["abs_error"] = out["error"].abs()
 
-    out["band"] = "mid"
-    out.loc[out["abs_error"] > far_threshold, "band"] = "far"
-    out.loc[out["abs_error"] <= near_threshold, "band"] = "near"
+    out["band"] = bands[0]
+    for band, upper in zip(bands[1:], thresholds):
+        out.loc[out["abs_error"] <= upper, "band"] = band
 
     return out
+
+
+def brake_region(thresholds: Tuple[float, ...]) -> Tuple[float, float]:
+    """(lower, upper) abs-error edges of the whole braking region.
+
+    Braking strength ramps across this region as a whole rather than resetting at
+    every internal band boundary, so the penalty stays monotone as the trajectory
+    closes on the setpoint. With 3 bands this is exactly the mid band.
+    """
+    return float(thresholds[-1]), float(thresholds[0])
 
 
 def bounds_for_band(args: argparse.Namespace, band: str) -> Dict[str, Tuple[float, float]]:
@@ -345,53 +547,53 @@ def overshoot_amount(df: pd.DataFrame, init_sign: float) -> pd.Series:
 # -------------------------------------- COST CALCULATION ---------------------------
 
 
-def compute_far_cost(
+def compute_approach_cost(
     df_all: pd.DataFrame,
-    df_far: pd.DataFrame,
-    far_threshold: float,
+    df_band: pd.DataFrame,
+    exit_threshold: float,
     min_band_samples: int,
     mae_weight: float,
     time_weight: float,
 ) -> Dict[str, float | int]:
     """
-    objective:
+    Outermost-band objective:
       - change quick
     """
-    n = int(len(df_far))
+    n = int(len(df_band))
     enough = n >= min_band_samples
 
     if n == 0:
         return {
             "n_samples": 0,
             "cost": float("nan"),
-            "far_mae": float("nan"),
-            "time_to_reach_mid_band": float("nan"),
+            "band_mae": float("nan"),
+            "time_to_exit_band": float("nan"),
         }
 
-    far_mae = safe_mean(df_far["abs_error"])
+    band_mae = safe_mean(df_band["abs_error"])
 
-    reached = df_all[df_all["abs_error"] <= far_threshold]
+    reached = df_all[df_all["abs_error"] <= exit_threshold]
     duration = float(df_all["t_rel"].iloc[-1] - df_all["t_rel"].iloc[0])
 
     if len(reached):
-        time_to_mid = float(reached["t_rel"].iloc[0])
+        time_to_exit = float(reached["t_rel"].iloc[0])
     else:
-        time_to_mid = duration * 1.5
+        time_to_exit = duration * 1.5
 
-    cost = mae_weight * far_mae + time_weight * time_to_mid
+    cost = mae_weight * band_mae + time_weight * time_to_exit
 
     return {
         "n_samples": n,
         "cost": float(cost) if enough else float("nan"),
-        "far_mae": float(far_mae),
-        "time_to_reach_mid_band": float(time_to_mid),
+        "band_mae": float(band_mae),
+        "time_to_exit_band": float(time_to_exit),
     }
 
 
-def compute_mid_cost(
-    df_mid: pd.DataFrame,
-    near_threshold: float,
-    far_threshold: float,
+def compute_brake_cost(
+    df_band: pd.DataFrame,
+    brake_lower: float,
+    brake_upper: float,
     min_band_samples: int,
     mae_weight: float,
     slope_weight: float,
@@ -400,10 +602,11 @@ def compute_mid_cost(
     brake_min_weight: float,
 ) -> Dict[str, float | int]:
     """
-    Mid-band objective:
+    Braking-band objective:
       - Reduce error.
-      - Start braking immediately from the beginning of the mid band.
-      - Increase braking strength progressively as the trajectory approaches the near band.
+      - Start braking immediately from the outer edge of the braking region.
+      - Increase braking strength progressively as the trajectory approaches the
+        settling band.
 
     Definitions:
       error = temp - temp_ref
@@ -413,34 +616,36 @@ def compute_mid_cost(
 
     The braking penalty does not punish every movement toward the target. It only
     punishes approach speed above brake_speed_target, and it weights that excess
-    speed more strongly close to the near band.
+    speed more strongly close to the settling band. brake_lower/brake_upper span
+    the whole braking region, not just this band, so the weight ramps monotonically
+    across every braking band instead of resetting at each boundary.
     """
-    n = int(len(df_mid))
+    n = int(len(df_band))
     enough = n >= min_band_samples
 
     if n == 0:
         return {
             "n_samples": 0,
             "cost": float("nan"),
-            "mid_mae": float("nan"),
+            "band_mae": float("nan"),
             "approach_speed": float("nan"),
             "weighted_approach_speed": float("nan"),
             "brake_penalty": float("nan"),
             "mean_brake_weight": float("nan"),
         }
 
-    mid_mae = safe_mean(df_mid["abs_error"])
+    band_mae = safe_mean(df_band["abs_error"])
 
-    approach_speed = (-df_mid["dabs_error_dt"]).clip(lower=0.0)
+    approach_speed = (-df_band["dabs_error_dt"]).clip(lower=0.0)
 
-    denom = max(float(far_threshold) - float(near_threshold), 1e-9)
-    progress_to_near = (float(far_threshold) - df_mid["abs_error"]) / denom
-    progress_to_near = progress_to_near.clip(lower=0.0, upper=1.0)
+    denom = max(float(brake_upper) - float(brake_lower), 1e-9)
+    progress_to_settle = (float(brake_upper) - df_band["abs_error"]) / denom
+    progress_to_settle = progress_to_settle.clip(lower=0.0, upper=1.0)
 
     brake_min_weight = float(np.clip(brake_min_weight, 0.0, 1.0))
     brake_power = max(float(brake_power), 1e-6)
     brake_weight = brake_min_weight + (1.0 - brake_min_weight) * np.power(
-        progress_to_near,
+        progress_to_settle,
         brake_power,
     )
 
@@ -451,22 +656,23 @@ def compute_mid_cost(
     mean_brake_weight = safe_mean(brake_weight)
 
     cost = (
-        mae_weight * mid_mae
+        mae_weight * band_mae
         + slope_weight * brake_penalty
     )
 
     return {
         "n_samples": n,
         "cost": float(cost) if enough else float("nan"),
-        "mid_mae": float(mid_mae),
+        "band_mae": float(band_mae),
         "approach_speed": float(safe_mean(approach_speed)),
         "weighted_approach_speed": float(weighted_approach_speed),
         "brake_penalty": float(brake_penalty),
         "mean_brake_weight": float(mean_brake_weight),
     }
 
-def compute_near_cost(
-    df_near: pd.DataFrame,
+
+def compute_settle_cost(
+    df_band: pd.DataFrame,
     min_band_samples: int,
     tail_seconds: float,
     init_sign: float,
@@ -476,19 +682,19 @@ def compute_near_cost(
     max_overshoot_weight: float,
 ) -> Dict[str, float | int]:
     """
-    Near-band objective:
+    Innermost-band objective:
       - Reduce tail MAE.
       - Reduce jitter/std.
-      - Improve overshoot only inside the near band.
+      - Improve overshoot only inside the settling band.
 
     Overshoot is still a soft penalty, not a hard constraint. The cost uses:
       - mean squared overshoot: penalizes sustained crossing.
       - max overshoot: softly discourages one deep crossing.
 
-    This keeps overshoot relevant without letting it dominate all other near-band
+    This keeps overshoot relevant without letting it dominate all other settling
     objectives.
     """
-    n = int(len(df_near))
+    n = int(len(df_band))
     enough = n >= min_band_samples
 
     if n == 0:
@@ -502,11 +708,11 @@ def compute_near_cost(
             "max_overshoot": float("nan"),
         }
 
-    t_last = float(df_near["t_rel"].iloc[-1])
-    tail = df_near[df_near["t_rel"] >= (t_last - tail_seconds)]
+    t_last = float(df_band["t_rel"].iloc[-1])
+    tail = df_band[df_band["t_rel"] >= (t_last - tail_seconds)]
 
     if len(tail) < max(3, min_band_samples // 2):
-        tail = df_near.tail(max(3, min(len(df_near), min_band_samples)))
+        tail = df_band.tail(max(3, min(len(df_band), min_band_samples)))
 
     tail_mae = safe_mean(tail["abs_error"])
     jitter_std = safe_std(tail["error"])
@@ -536,14 +742,62 @@ def compute_near_cost(
         "max_overshoot": float(max_overshoot),
     }
 
+
+def compute_band_cost(
+    band: str,
+    role: str,
+    df_all: pd.DataFrame,
+    df_band: pd.DataFrame,
+    thresholds: Tuple[float, ...],
+    init_sign: float,
+    args: argparse.Namespace,
+) -> Dict[str, float | int]:
+    if role == ROLE_APPROACH:
+        return compute_approach_cost(
+            df_all=df_all,
+            df_band=df_band,
+            exit_threshold=float(thresholds[0]),
+            min_band_samples=args.min_band_samples,
+            mae_weight=band_attr(args, band, "mae_weight"),
+            time_weight=band_attr(args, band, "time_weight"),
+        )
+
+    if role == ROLE_BRAKE:
+        brake_lower, brake_upper = brake_region(thresholds)
+        return compute_brake_cost(
+            df_band=df_band,
+            brake_lower=brake_lower,
+            brake_upper=brake_upper,
+            min_band_samples=args.min_band_samples,
+            mae_weight=band_attr(args, band, "mae_weight"),
+            slope_weight=band_attr(args, band, "slope_weight"),
+            brake_power=band_attr(args, band, "brake_power"),
+            brake_speed_target=band_attr(args, band, "brake_speed_target"),
+            brake_min_weight=band_attr(args, band, "brake_min_weight"),
+        )
+
+    return compute_settle_cost(
+        df_band=df_band,
+        min_band_samples=args.min_band_samples,
+        tail_seconds=args.tail_seconds,
+        init_sign=init_sign,
+        tail_mae_weight=band_attr(args, band, "tail_mae_weight"),
+        jitter_weight=band_attr(args, band, "jitter_weight"),
+        overshoot_weight=band_attr(args, band, "overshoot_weight"),
+        max_overshoot_weight=band_attr(args, band, "max_overshoot_weight"),
+    )
+
 def compute_run_band_metrics(
     run_dir: Path,
     telemetry_csv: Path,
     args: argparse.Namespace,
 ) -> List[Dict[str, object]]:
+    bands = resolve_bands(args)
+    thresholds = resolve_thresholds(args)
+    roles = band_roles(bands)
+
     df = load_telemetry(telemetry_csv)
-    df = classify_bands(df, far_threshold=args.far_threshold,
-                        near_threshold=args.near_threshold)
+    df = classify_bands(df, bands=bands, thresholds=thresholds)
     df = add_time_and_slopes(df)
     summary_context = load_run_summary_context(run_dir)
 
@@ -555,51 +809,19 @@ def compute_run_band_metrics(
     target_temp = finite_or_fallback(
         float(df["temp_ref"].iloc[-1]), summary_context.get("target_temp"))
 
-    df_far = df[df["band"] == "far"].copy()
-    df_mid = df[df["band"] == "mid"].copy()
-    df_near = df[df["band"] == "near"].copy()
-
-    far_metrics = compute_far_cost(
-        df_all=df,
-        df_far=df_far,
-        far_threshold=args.far_threshold,
-        min_band_samples=args.min_band_samples,
-        mae_weight=args.far_mae_weight,
-        time_weight=args.far_time_weight,
-    )
-
-    mid_metrics = compute_mid_cost(
-        df_mid=df_mid,
-        near_threshold=args.near_threshold,
-        far_threshold=args.far_threshold,
-        min_band_samples=args.min_band_samples,
-        mae_weight=args.mid_mae_weight,
-        slope_weight=args.mid_slope_weight,
-        brake_power=args.mid_brake_power,
-        brake_speed_target=args.mid_brake_speed_target,
-        brake_min_weight=args.mid_brake_min_weight,
-    )
-
-    near_metrics = compute_near_cost(
-        df_near=df_near,
-        min_band_samples=args.min_band_samples,
-        tail_seconds=args.tail_seconds,
-        init_sign=init_sign,
-        tail_mae_weight=args.near_tail_mae_weight,
-        jitter_weight=args.near_jitter_weight,
-        overshoot_weight=args.near_overshoot_weight,
-        max_overshoot_weight=args.near_max_overshoot_weight,
-    )
-
-    band_to_df = {"far": df_far, "mid": df_mid, "near": df_near}
-    band_to_metrics = {"far": far_metrics,
-                       "mid": mid_metrics, "near": near_metrics}
-
     records: List[Dict[str, object]] = []
 
-    for band in BANDS:
-        df_band = band_to_df[band]
-        metrics = band_to_metrics[band]
+    for band in bands:
+        df_band = df[df["band"] == band].copy()
+        metrics = compute_band_cost(
+            band=band,
+            role=roles[band],
+            df_all=df,
+            df_band=df_band,
+            thresholds=thresholds,
+            init_sign=init_sign,
+            args=args,
+        )
 
         if len(df_band):
             coefs = band_coefficients(df_band)
@@ -610,6 +832,7 @@ def compute_run_band_metrics(
         rec: Dict[str, object] = {
             "run_id": run_id,
             "band": band,
+            "role": roles[band],
             "kp": coefs["kp"],
             "ki": coefs["ki"],
             "kd": coefs["kd"],
@@ -623,6 +846,11 @@ def compute_run_band_metrics(
         for k, v in metrics.items():
             if k not in rec:
                 rec[k] = v
+
+        # Aliased spellings read by gru/gp_build.py and gru/mpc_build.py.
+        for new_key, legacy_key in LEGACY_METRIC_ALIASES.get(roles[band], {}).items():
+            if new_key in metrics:
+                rec[legacy_key] = metrics[new_key]
 
         records.append(rec)
 
@@ -648,7 +876,6 @@ def compute_all_run_metrics(args: argparse.Namespace) -> pd.DataFrame:
         try:
             records = compute_run_band_metrics(run_dir, telemetry_csv, args)
             all_records.extend(records)
-            # print(f"[OK] metrics: {run_dir} - {telemetry_csv.name}")
         except Exception as exc:
             print(f"[WARN] skipped {run_dir}: {exc}")
 
@@ -676,6 +903,9 @@ def fit_one_band_gp(
     ].copy()
 
     df = df.dropna(subset=[*FEATURE_COLS, "cost"])
+
+    if df.empty:
+        return None
 
     X = df[list(FEATURE_COLS)].to_numpy(dtype=float)
     y = df["cost"].to_numpy(dtype=float)
@@ -855,6 +1085,11 @@ def suggest_for_band(
 
 
 def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) -> Dict[str, object]:
+    bands = resolve_bands(args)
+    thresholds = resolve_thresholds(args)
+    roles = band_roles(bands)
+    combo_top_k = resolve_combo_top_k(args)
+
     models: Dict[str, Optional[Dict[str, object]]] = {}
     suggestions: Dict[str, Dict[str, object]] = {}
     suggestion_context = resolve_suggestion_context(training_table, args)
@@ -863,13 +1098,20 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
     run_prefix_counts = run_ids.str.split(
         "_", n=1).str[0].value_counts().to_dict()
 
-    for i, band in enumerate(BANDS):
+    for i, band in enumerate(bands):
         model = fit_one_band_gp(
             training_table=training_table,
             band=band,
             n_restarts_optimizer=args.n_restarts_optimizer,
         )
         models[band] = model
+        if model is None:
+            raise RuntimeError(
+                f"No usable training rows for band '{band}'. Every run needs at least "
+                f"{args.min_band_samples} samples in that band "
+                f"(--min-band-samples), and the {len(bands)}-band thresholds "
+                f"{thresholds} must match the runner's --cross-band-N values."
+            )
 
         suggestion = suggest_for_band(
             model=model,
@@ -900,21 +1142,8 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
 
     payload: Dict[str, object] = {
         "suggested_controller": {
-            "far": {
-                "kp": suggestions["far"]["kp"],
-                "ki": suggestions["far"]["ki"],
-                "kd": suggestions["far"]["kd"],
-            },
-            "mid": {
-                "kp": suggestions["mid"]["kp"],
-                "ki": suggestions["mid"]["ki"],
-                "kd": suggestions["mid"]["kd"],
-            },
-            "near": {
-                "kp": suggestions["near"]["kp"],
-                "ki": suggestions["near"]["ki"],
-                "kd": suggestions["near"]["kd"],
-            },
+            band: {coef: suggestions[band][coef] for coef in COEF_COLS}
+            for band in bands
         },
         "band_predictions": {
             band: {
@@ -931,37 +1160,35 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
                 "best_observed_cost": None if models[band] is None else models[band]["best_cost"],
                 "best_observed_triplet": None if models[band] is None else models[band]["best_x"],
             }
-            for band in BANDS
+            for band in bands
         },
-        "candidate_combinations": candidate_combination_lines(suggestions),
+        "candidate_combinations": candidate_combination_lines(
+            suggestions,
+            bands=bands,
+            top_by_band=combo_top_k,
+        ),
         "suggestion_context": suggestion_context,
         "meta": {
             "generated_at": int(time.time()),
             "history_root": str(Path(args.history_root).resolve()),
             "acquisition": args.acquisition,
-            "far_threshold": args.far_threshold,
-            "near_threshold": args.near_threshold,
+            "band_mode": len(bands),
+            "bands": list(bands),
+            "band_roles": {band: roles[band] for band in bands},
+            "band_thresholds": [float(t) for t in thresholds],
             "min_band_samples": args.min_band_samples,
             "feature_columns": list(FEATURE_COLS),
-            "far_mae_weight": args.far_mae_weight,
-            "far_time_weight": args.far_time_weight,
-            "mid_mae_weight": args.mid_mae_weight,
-            "mid_slope_weight": args.mid_slope_weight,
-            "mid_brake_power": args.mid_brake_power,
-            "mid_brake_speed_target": args.mid_brake_speed_target,
-            "mid_brake_min_weight": args.mid_brake_min_weight,
-            "near_tail_mae_weight": args.near_tail_mae_weight,
-            "near_jitter_weight": args.near_jitter_weight,
-            "near_overshoot_weight": args.near_overshoot_weight,
-            "near_max_overshoot_weight": args.near_max_overshoot_weight,
+            "band_weights": {
+                band: band_weight_summary(args, band, roles[band])
+                for band in bands
+            },
+            "tail_seconds": args.tail_seconds,
             "xi": args.xi,
             "lcb_kappa": args.lcb_kappa,
             "n_candidates": args.n_candidates,
             "top_k": args.top_k,
             "combination_export_top_by_band": {
-                "far": 1,
-                "mid": 3,
-                "near": 3,
+                band: int(count) for band, count in zip(bands, combo_top_k)
             },
             "training_run_prefix_counts": {
                 str(prefix): int(count)
@@ -970,7 +1197,7 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
             "bounds": {
                 band: {k: list(v)
                        for k, v in bounds_for_band(args, band).items()}
-                for band in BANDS
+                for band in bands
             },
             "outputs": {
                 "models": str(Path(args.models_out).resolve()),
@@ -1006,6 +1233,9 @@ def train_and_suggest(training_table: pd.DataFrame, args: argparse.Namespace) ->
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    bands = resolve_bands(args)
+    thresholds = resolve_thresholds(args)
+    width = max(len(band) for band in bands)
 
     training_table = compute_all_run_metrics(args)
     payload = train_and_suggest(training_table, args)
@@ -1014,27 +1244,33 @@ def main() -> None:
     n_runs = int(training_table["run_id"].nunique()
                  ) if "run_id" in training_table.columns else 0
     print(f"Training runs computed: {n_runs}")
+    print(
+        f"Bands: {len(bands)} "
+        f"({', '.join(bands)}) at thresholds {', '.join(format(t, 'g') for t in thresholds)}"
+    )
 
     print("\nSuggested controller:")
-    for band in BANDS:
+    for band in bands:
         s = payload["suggested_controller"][band]
         pred = payload["band_predictions"][band]
         print(
-            f"  {band:>4}: "
+            f"  {band:>{width}}: "
             f"kp={s['kp']:.0f}, ki={s['ki']:.0f}, kd={s['kd']:.0f} "
             f"| source={pred['source']}, "
             f"pred_cost={pred['pred_cost']}, pred_std={pred['pred_std']}"
         )
 
     print("\nBest observed by band:")
-    for band in BANDS:
+    for band in bands:
         pred = payload["band_predictions"][band]
         print(
-            f"  {band:>4}: "
+            f"  {band:>{width}}: "
             f"n={pred['n_training_samples']}, "
             f"best_cost={pred['best_observed_cost']}, "
             f"best_triplet={pred['best_observed_triplet']}"
         )
+
+    print(f"\nPID_SCHEDULES written to: {args.combinations_out}")
 
 
 if __name__ == "__main__":

@@ -1,19 +1,11 @@
 """Model-predictive-control rollout and CEM/random-shooting optimizer.
 
-gru/mpc_gru.py and lstm/mpc_lstm.py implemented this receding-horizon MPC
-loop independently, byte-for-byte identical apart from two seams: how the
-next temperature delta is predicted (predict_fn: GRU vs LSTM forward pass)
-and how a candidate rollout's cost is scored (cost_fn: each model script
-tunes its own cost-weight design -- GRU's includes a "motion" smoothness
-term, LSTM's includes a control-change penalty -- these are genuinely
-different, not duplicated, so they stay local to each mpc_*.py and are
-passed in here rather than merged).
+The plant model and the cost design are supplied by the caller:
 
 predict_fn signature:  (model, checkpoint, feature_window, device) -> float
 cost_fn signature:     (*, temps, candidate_pid, previous_pid, start_temp,
                          target_temp, valid, args) -> Dict[str, float]
-                        (must include a "cost" key; candidate_pid/previous_pid
-                        may be ignored by cost designs that don't need them)
+                        (must include a "cost" key)
 """
 
 from __future__ import annotations
@@ -31,10 +23,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-# ChamberPID/CodesysDiff are the physical PID/differentiator emulation used
-# by both the GRU and LSTM MPC schedulers; they live in gru.gru_common
-# because that's where they were first extracted, not because they are
-# GRU-specific. Imported here rather than re-implemented.
+# Physical PID/differentiator emulation, shared by the GRU and LSTM schedulers.
 from gru.gru_common import ChamberPID, CodesysDiff
 
 from deepvac.pid import clip_pid, pid_bounds
@@ -124,8 +113,7 @@ def add_common_mpc_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--history-time-scale", type=float, default=600.0)
     ap.add_argument("--history-velocity-scale", type=float, default=0.2)
 
-    # NOTE: --w-near-std is intentionally NOT here -- gru's and lstm's default
-    # differ (1.0 vs 2.0), so each script's build_arg_parser() adds it itself.
+    # --w-near-std is added by each scheduler script; the defaults differ.
     ap.add_argument("--w-invalid", type=float, default=1_000_000.0)
 
     ap.add_argument("--tail-window-s", type=float, default=300.0)
@@ -582,7 +570,7 @@ def rollout_constant_pid(
     predict_fn: PredictFn,
     cost_fn: CostFn,
 ) -> tuple[dict[str, float], list[float]]:
-    # Important: deep-copy PID and diff so horizon rollouts do not mutate the real simulation state.
+    # Deep-copied so horizon rollouts do not mutate the real simulation state.
     state = copy.deepcopy(initial_state)
     pid_vec = clip_pid(candidate_pid, args)
     state.kp, state.ki, state.kd = float(pid_vec[0]), float(pid_vec[1]), float(pid_vec[2])
@@ -986,10 +974,7 @@ def run_mpc_simulation(
             "horizon_steps": int(decision["horizon_steps"]),
             "optimize_ms": float(optimize_ms),
         }
-        # Only include horizon_* / pid_change_norm keys this cost_fn actually
-        # produced, so each model's decisions CSV keeps its original column
-        # set instead of being padded with always-NaN columns from the
-        # other model's cost design.
+        # Only the horizon_* / pid_change_norm keys this cost_fn produced.
         for optional_key in (
             "horizon_overshoot_max",
             "horizon_overshoot_rmse",

@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """Unified `deepvac` command-line entry point.
 
-This is a thin dispatcher, not a rewrite: each subcommand imports the
-existing script module and forwards the remaining argv to that module's own
-`main()` / `build_arg_parser()`, unchanged. Every flag documented by e.g.
-`python -m gru.train_gru --help` keeps working exactly the same way under
-`deepvac train-gru --help` -- this only adds one discoverable entry point
-instead of "clone the repo and go read 34 scripts to find the right one."
+Each subcommand imports its script module and forwards the remaining argv to
+that module's own `main()` / `build_arg_parser()`.
 
 Usage:
     deepvac <command> [--help] [command-specific flags...]
@@ -40,14 +36,18 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "mpc-lstm": ("lstm.mpc_lstm", "Continuous LSTM + MPC PID scheduler (CEM/random shooting)."),
     "batch-mpc-lstm": ("lstm.batch_mpc_runs", "Batch LSTM + MPC runs across scenarios, compare results."),
     "train-lstm-legacy": ("lstm.lstm", "Older standalone LSTM pipeline, kept for comparison only."),
+    "train-gru-rollout": ("gru.train_gru_rollout", "Train the GRU on multi-step rollouts, selected on rollout error."),
 
     # --- Bayesian optimization / AI advisor (optimization/) ----------------
     "optimize-training-loop": ("optimization.training_loop", "Closed-loop band-BO runner against the live chamber."),
-    "optimize-band-bo": ("optimization.band_bo_gp", "Fit far/mid/near GP-BO models and suggest next PID candidates."),
+    "optimize-band-bo": ("optimization.band_bo_gp", "Fit per-band GP-BO models (--band-mode 3|5) and suggest next PID candidates."),
     "optimize-compute-model": ("optimization.compute_one_model", "Fit one GP-BO model over far/mid/near PID coeffs."),
     "optimize-random-pid": ("optimization.random_pid_tests", "Automated multi-run TCP tests with random PIDs."),
     "optimize-tocero-3band": ("optimization.tocero_3band", "Automated multi-run TCP tests, 3-band PID schedule."),
     "optimize-tocero-5band": ("optimization.tocero_5band", "Automated multi-run TCP tests, 5-band PID schedule."),
+    "optimize-tocero-gp-mpc": ("optimization.tocero_gp_mpc", "Live run: GP far-band PID, then GRU+MPC replanning inside the band."),
+    "collect-runs": ("optimization.collect_runs", "Repeated, start-gated runs driven by a time-indexed PID profile (logs the reheat)."),
+    "settling-metrics": ("optimization.settling_metrics", "Score overshoot, jitter, bias and settling per setpoint episode."),
     "replay-gp": ("optimization.gp_experiment", "Replay one GRU-ranked GP decision schedule over TCP."),
     "replay-gp-batch": ("optimization.batch_gp_experiment", "Replay multiple GRU-ranked GP decision schedules."),
     "replay-mpc": ("optimization.mpc_experiment", "Replay MPC PID decisions over TCP."),
@@ -98,9 +98,8 @@ def main(argv: list[str] | None = None) -> int:
 
     module_name, _ = entry
     module = importlib.import_module(module_name)
-    # Each script's own build_arg_parser()/main() reads argparse.parse_args()
-    # from sys.argv, so forward the remaining argv exactly as if that script
-    # had been invoked directly (python -m <module_name> <rest>).
+    # The target module parses sys.argv itself, so present argv as if it had
+    # been invoked directly (python -m <module_name> <rest>).
     sys.argv = [module_name, *rest]
     return module.main() or 0
 

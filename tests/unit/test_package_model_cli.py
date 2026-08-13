@@ -1,8 +1,6 @@
 """Unit tests for deepvac/package_model.py's argument validation (the
-`deepvac package-model` CLI). The actual packaging work (ONNX export,
-insight sync) is covered by tests/integration/test_package_model_onnx.py --
-this only covers the CLI's own input validation, which doesn't need onnx
-installed."""
+`deepvac package-model` CLI). The packaging work itself is covered by
+tests/integration/test_package_model_onnx.py."""
 
 from __future__ import annotations
 

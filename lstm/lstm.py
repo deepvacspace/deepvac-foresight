@@ -436,7 +436,7 @@ def save_model_bundle(
         "history_dir": str(Path(args.history_dir).resolve()),
     }
 
-    # Keep old key for compatibility with previous prediction scripts.
+    # Alias read by the prediction scripts.
     payload["best_val_loss"] = best_val_loss_scaled
 
     with out_path.open("wb") as fh:

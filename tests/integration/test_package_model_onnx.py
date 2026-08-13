@@ -1,8 +1,6 @@
 """Integration test for deepvac/packaging.py's ONNX export (the
-control2-client / C++ Qt target of `deepvac package-model`, see
-DEV_GUIDE.md §7). Marked slow: torch's ONNX exporter has noticeable
-per-call overhead. Skipped entirely if the `package` extra (onnx,
-onnxruntime) isn't installed.
+control2-client / C++ Qt target of `deepvac package-model`). Marked slow, and
+skipped unless the `package` extra (onnx, onnxruntime) is installed.
 """
 
 from __future__ import annotations

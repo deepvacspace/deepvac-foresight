@@ -1,13 +1,5 @@
 """Run-id/CSV/JSON persistence, run-directory discovery, and batch-scenario
 orchestration.
-
-Consolidates utils/bo_common.py's file helpers, utils/utils.py's
-append_row_csv, the iter_run_dirs() function that was copy-pasted
-identically into optimization/band_bo_gp.py, rank_runs.py, list_runs.py, and
-ai_advisor_improvement.py, and the ~80% of gru/batch_mpc_runs.py and
-lstm/batch_mpc_runs.py that was generic batch orchestration (CLI-command
-construction, summary discovery/flattening, and result ranking) rather than
-model-specific scenario definitions.
 """
 
 from __future__ import annotations
@@ -50,9 +42,8 @@ def append_rows_csv(path: str, rows: Iterable[dict[str, object]]) -> None:
 
 
 def append_row_csv(path: str, row: dict[str, object]) -> None:
-    """Like append_rows_csv, but aligns a single row to an existing file's
-    header (missing columns become blank) instead of requiring an exact
-    column match. Used where the row shape can grow between runs."""
+    """Append one row, aligned to the file's existing header (missing columns
+    become blank)."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -114,13 +105,7 @@ def iter_run_dirs(history_root: Path) -> Iterator[Path]:
 
 
 # -----------------------------------------------------------------------------
-# Batch-scenario orchestration (gru/batch_mpc_runs.py, lstm/batch_mpc_runs.py).
-#
-# Each script still defines build_arg_parser() (its own --script/--checkpoint
-# defaults) and make_scenarios() (its own cost-weight scenario groups, which
-# genuinely differ between the GRU and LSTM MPC cost designs -- see
-# gru/mpc_gru.py:horizon_cost vs lstm/mpc_lstm.py:horizon_cost). Everything
-# below was byte-identical between the two files.
+# Batch-scenario orchestration (gru/batch_mpc_runs.py, lstm/batch_mpc_runs.py)
 # -----------------------------------------------------------------------------
 
 

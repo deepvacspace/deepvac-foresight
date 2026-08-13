@@ -1,13 +1,9 @@
-"""Integration tests for deepvac/mpc.py's receding-horizon rollout +
-CEM/random-shooting optimizer -- the logic gru/mpc_gru.py and
-lstm/mpc_lstm.py share (see deepvac/mpc.py's module docstring).
+"""Integration tests for deepvac/mpc.py's receding-horizon rollout and
+CEM/random-shooting optimizer.
 
-Uses a small deterministic fake plant model (predict_fn) instead of a real
-GRU/LSTM checkpoint: the control-loop logic (candidate rollout, cost
-composition, the safety gate that keeps the current PID unless a candidate
-is a meaningful improvement) is what's under test here, not any specific
-trained model's predictions. This keeps these tests fast and exactly
-reproducible.
+Runs against a small deterministic fake plant model (predict_fn) rather than a
+trained checkpoint, so what is under test is the control-loop logic: candidate
+rollout, cost composition, and the safety gate.
 """
 
 from __future__ import annotations
@@ -22,9 +18,9 @@ from gru.gru_common import ChamberPID, CodesysDiff
 
 def fake_predict_fn(model, checkpoint, feature_window, device):
     """First-order decay toward temp_ref: bigger kp -> faster approach.
-    Reads the *current* row of the feature window (the one step_state just
-    wrote via make_feature_row), mirroring what a real plant model would be
-    conditioned on."""
+
+    Reads the current row of the feature window, the one step_state just wrote.
+    """
     row = feature_window[-1]
     names = DEFAULT_FEATURE_NAMES
     temp = float(row[names.index("temp")])

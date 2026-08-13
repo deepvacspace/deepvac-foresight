@@ -131,16 +131,8 @@ def export_onnx(checkpoint_path: Path, model_type: ModelType, output_dir: Path) 
         output_names=["temp_delta_t1"],
         dynamic_axes={"feature_window": {0: "batch"}, "temp_delta_t1": {0: "batch"}},
         opset_version=17,
-        # The default dynamo=True exporter traces via torch.export.export(),
-        # which is stricter about the environment than the traditional
-        # TorchScript-based exporter and trips over the fake `sklearn` module
-        # _ensure_sklearn_stub() (called by load_model() above) registers in
-        # sys.modules. That stub only exists so torch.load() can unpickle a
-        # checkpoint's StandardScaler without scikit-learn installed; it's
-        # irrelevant to this export (the fitted scaler values are already
-        # baked into _ScaledPlantModel's buffers by this point), so use the
-        # traditional exporter here instead of trying to make the stub more
-        # convincing.
+        # The dynamo exporter trips over the fake `sklearn` module that
+        # _ensure_sklearn_stub() registers in sys.modules.
         dynamo=False,
     )
 
@@ -201,8 +193,6 @@ def verify_onnx(onnx_path: Path, checkpoint_path: Path, model_type: ModelType, a
 # insight (PySide6) sync
 # -----------------------------------------------------------------------------
 
-# Simulator-view logic (simulate_candidate/compute_metrics)
- 
 GENERATED_END_MARKER = "# === END GENERATED (deepvac package-model) ==="
 
 _MODERNIZE_SUBS = [
@@ -260,19 +250,13 @@ def _generate_shared_block(model_type: ModelType) -> str:
         "",
         "",
         "class _Scaler(Protocol):",
-        '    """Shape checkpoint["x_scaler"]/["y_scaler"] are expected to have --',
-        "    matches sklearn.preprocessing.StandardScaler and the minimal stub",
-        "    registered by _ensure_sklearn_stub() below. checkpoint is typed as",
-        "    dict[str, object] (its values are heterogeneous: tensors, ints, these",
-        "    scalers, ...), so this Protocol + cast() is how callers get a typed",
-        '    view of the two entries they actually call methods on."""',
+        '    """Scaler interface of checkpoint["x_scaler"]/["y_scaler"]."""',
         "",
         "    def transform(self, X: np.ndarray) -> np.ndarray: ...",
         "    def inverse_transform(self, X: np.ndarray) -> np.ndarray: ...",
         "",
         "",
-        "# compute_metrics()/simulate_candidate()'s per-candidate result: mostly",
-        "# float, but candidate_id is int, valid is bool, and invalid_reason is str.",
+        "# Per-candidate result of compute_metrics()/simulate_candidate().",
         "Metrics = dict[str, float | int | bool | str]",
         "",
         "",
@@ -341,13 +325,7 @@ def _generate_shared_block(model_type: ModelType) -> str:
         "",
         _source_of(_mpc.initialize_feature_window),
         "",
-        # deepvac.mpc.run_pid_substeps takes temp_end/temp_mode (it also
-        # supports interpolating toward a future temperature; used by MPC
-        # rollouts). The Simulator view below only ever holds temp_start and
-        # has no caller for those two parameters, so this keeps its original,
-        # simpler call signature and forwards into the canonical
-        # implementation with temp_mode="hold" (temp_end is unused in that
-        # mode) rather than changing simulate_candidate()'s call site.
+        # Wrapped below in a temp_mode="hold" signature for the Simulator view.
         _source_of(_mpc.run_pid_substeps).replace(
             "def run_pid_substeps(", "def _run_pid_substeps_impl("
         ),

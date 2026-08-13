@@ -7,9 +7,8 @@
 4. Applies the best PID only for a short hold interval.
 5. Replans from the new state.
 
-The receding-horizon rollout/optimizer loop is shared with lstm/mpc_lstm.py
-via deepvac.mpc; this file supplies the GRU-specific prediction function and
-this script's own cost-weight design (see horizon_cost below).
+The rollout/optimizer loop comes from deepvac.mpc; this file supplies the
+GRU prediction function and the cost design (see horizon_cost below).
 
 Example:
 
@@ -80,8 +79,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--candidate-table", default=str(DEFAULT_CANDIDATE_TABLE),
                     help="Prebuilt CSV from mp_build.py. Empty string disables history seeding.")
 
-    # MPC horizon/hold and cost weights are model-specific tuning, not shared
-    # with lstm/mpc_lstm.py's cost design.
+    # MPC horizon/hold and cost weights for this script's cost design.
     ap.add_argument("--mpc-horizon-s", type=float, default=80.0,
                     help="Future horizon optimized at every MPC decision.")
     ap.add_argument("--mpc-hold-s", type=float, default=20.0,

@@ -1,6 +1,5 @@
-"""Unit tests for deepvac/cli.py's dispatcher. Doesn't exercise any real
-subcommand's business logic (that's each module's own concern) -- just that
-argv forwarding, --list/--help, and unknown-command handling work."""
+"""Unit tests for deepvac/cli.py's dispatcher: argv forwarding, --list/--help,
+and unknown-command handling."""
 
 from __future__ import annotations
 

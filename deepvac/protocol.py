@@ -1,12 +1,7 @@
 """Canonical import path for the chamber TCP protocol.
 
 The wire protocol (packet framing, CRC-16, Pascal strings, settings/state
-requests, PID writes) is implemented once, in tcp/tcp_common.py, and is not
-duplicated elsewhere in the source tree. tcp/get_settings.py, get_states.py,
-temp_ref.py, and write_setting.py import it directly since they live next to
-it; everything else (deepvac.pid, optimization/) should import it from here
-so there is one obvious canonical path regardless of which package is doing
-the importing.
+requests, PID writes) is implemented in tcp/tcp_common.py and re-exported here.
 """
 
 from __future__ import annotations

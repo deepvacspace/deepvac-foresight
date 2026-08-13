@@ -43,6 +43,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 	ap.add_argument("--num-tests", type=int, default=15)
 	ap.add_argument("--forever", action="store_true", help="Run tests continuously")
+	ap.add_argument("--val", action="store_true", help="Save runs with val_* ids for validation.")
 	ap.add_argument("--seed", type=int, default=None)
 
 	ap.add_argument("--test-duration", type=float, default=20.0 * 60.0, help="Seconds")
@@ -59,12 +60,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--dt", type=float, default=1.0)
 	ap.add_argument("--progress-every", type=float, default=60.0)
 
+	ap.add_argument(
+		"--skip-preconditioning",
+		action="store_true",
+		help="Skip heatup and cooldown before every test",
+	)
+
 	ap.add_argument("--entry-band", type=float, default=2.0)
 	ap.add_argument("--overshoot-weight", type=float, default=10.0)
 
 	ap.add_argument("--cross-band-1", type=float, default=12.0)
-	ap.add_argument("--cross-band-2", type=float, default=7.0)
-	ap.add_argument("--cross-band-3", type=float, default=3.0)
+	ap.add_argument("--cross-band-2", type=float, default=8.0)
+	ap.add_argument("--cross-band-3", type=float, default=5.0)
 	ap.add_argument("--cross-band-4", type=float, default=1.0)
 
 	ap.add_argument("--temp-ref-min", type=float, default=-20.0)
@@ -118,11 +125,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--tcp-host", default=DEFAULT_HOST)
 	ap.add_argument("--tcp-port", type=int, default=DEFAULT_PORT)
 	ap.add_argument("--tcp-timeout", type=float, default=DEFAULT_TIMEOUT)
+	ap.add_argument("--read-retries", type=int, default=2)
+	ap.add_argument("--read-retry-delay-s", type=float, default=0.25)
+	ap.add_argument("--max-consecutive-failures", type=int, default=10)
 
-	ap.add_argument("--history-root", default="history5")
+	# Separate from the 3-band history: these summaries carry 15 PID columns.
+	ap.add_argument("--history-root", default="history_5_bands")
 	ap.add_argument("--samples-csv", default="run_samples.csv")
 	ap.add_argument("--runs-csv", default="run_summary.csv")
-	ap.add_argument("--all-runs-csv", default=str(output_dir / "bo_all_runs.csv"))
+	ap.add_argument("--all-runs-csv", default=str(output_dir / "bo_all_runs_5band.csv"))
 
 	return ap
 
@@ -134,13 +145,14 @@ def run_single_test(
 	pid_plan: Dict[str, PIDTriplet],
 	pid_source: str,
 ) -> None:
-	run_id = make_run_id(prefix="run")
+	run_id = make_run_id(prefix="val" if args.val else "run")
 	test_label = f"{run_idx}" if total_tests is None else f"{run_idx}/{total_tests}"
 
 	temp_ref_target = float(args.test_temp_ref)
-	condition_pretest = bool(args.condition_initial) or run_idx > 1
+	condition_pretest = (bool(args.condition_initial) or run_idx > 1) and not args.skip_preconditioning
 
 	print(f"[run {run_id}] starting test {test_label}")
+
 	if condition_pretest:
 		print(
 			f"[run {run_id}] preconditioning: temp_ref={args.heatup_temp_ref:.3f} "
@@ -159,7 +171,10 @@ def run_single_test(
 			print(f"[run {run_id}] post-heatup cooldown for {args.post_heatup_cooldown:.1f}s (no logging)")
 			time.sleep(args.post_heatup_cooldown)
 	else:
-		print(f"[run {run_id}] skipping initial preconditioning and post-heatup cooldown")
+		if args.skip_preconditioning:
+			print(f"[run {run_id}] skipping preconditioning and post-heatup cooldown")
+		else:
+			print(f"[run {run_id}] skipping initial preconditioning and post-heatup cooldown")
 
 	print(f"[run {run_id}] selected temp_ref={temp_ref_target}")
 	print(
@@ -174,6 +189,10 @@ def run_single_test(
 		f"[run {run_id}] PID before (TCP): "
 		f"kp={tcp_pid_before['kp']:.3f}, ki={tcp_pid_before['ki']:.3f}, kd={tcp_pid_before['kd']:.3f}"
 	)
+
+	# Prime the TCP state-name cache before the active test starts. Some controller
+	# replies appear to omit names intermittently once a job is running.
+	_ = request_temperature_states(host=args.tcp_host, port=args.tcp_port, timeout=args.tcp_timeout)
 
 	publish_temp_ref_job(
 		temp_ref=temp_ref_target,
@@ -202,6 +221,7 @@ def run_single_test(
 	crossed_band_2 = False
 	crossed_band_3 = False
 	crossed_band_4 = False
+	consecutive_read_failures = 0
 
 	t0 = time.time()
 	next_progress_ts = t0 + args.progress_every if args.progress_every > 0 else float("inf")
@@ -215,7 +235,32 @@ def run_single_test(
 		if elapsed >= args.test_duration:
 			break
 
-		snap = request_temperature_states(host=args.tcp_host, port=args.tcp_port, timeout=args.tcp_timeout)
+		snap: Optional[Dict[str, float]] = None
+		last_read_exc: Optional[Exception] = None
+		for _ in range(max(1, args.read_retries + 1)):
+			try:
+				snap = request_temperature_states(host=args.tcp_host, port=args.tcp_port, timeout=args.tcp_timeout)
+				break
+			except Exception as exc:
+				last_read_exc = exc
+				if args.read_retry_delay_s > 0:
+					time.sleep(args.read_retry_delay_s)
+
+		if snap is None:
+			consecutive_read_failures += 1
+			if last_read_exc is not None:
+				print(
+					f"[run {run_id}] read failed "
+					f"({consecutive_read_failures}/{args.max_consecutive_failures}): {last_read_exc}"
+				)
+			if consecutive_read_failures >= args.max_consecutive_failures:
+				raise RuntimeError(
+					f"Too many consecutive state read failures ({consecutive_read_failures})"
+				) from last_read_exc
+			time.sleep(args.dt)
+			continue
+
+		consecutive_read_failures = 0
 		abs_err_to_target = abs(float(snap["temp"]) - temp_ref_target)
 
 		if prev_abs_err is not None:
@@ -386,6 +431,12 @@ def main() -> None:
 		raise ValueError("--post-heatup-cooldown must be >= 0")
 	if args.progress_every < 0:
 		raise ValueError("--progress-every must be >= 0")
+	if args.read_retries < 0:
+		raise ValueError("--read-retries must be >= 0")
+	if args.read_retry_delay_s < 0:
+		raise ValueError("--read-retry-delay-s must be >= 0")
+	if args.max_consecutive_failures <= 0:
+		raise ValueError("--max-consecutive-failures must be > 0")
 	if not (args.cross_band_4 <= args.cross_band_3 <= args.cross_band_2 <= args.cross_band_1):
 		raise ValueError("--cross-band-4 <= --cross-band-3 <= --cross-band-2 <= --cross-band-1 is required")
 	if args.temp_ref_min >= args.temp_ref_max:

@@ -1,12 +1,5 @@
 """Run-history discovery, sequence building, scaling, and plotting for the
 one-step GRU/LSTM plant models.
-
-This is a straight move of what used to be gru/utils.py: despite the name,
-it was already model-agnostic and lstm/train_lstm.py imported every public
-name from it directly (`from gru.utils import ...`). That cross-package
-import was the concrete instance of the "model vs gru.model" import-mixing
-this package resolves -- there was already exactly one implementation, just
-homed under the wrong package name.
 """
 
 from __future__ import annotations
@@ -28,7 +21,6 @@ from torch.utils.data import DataLoader
 
 from deepvac.schemas import DEFAULT_FEATURE_NAMES
 
-# Kept as FEATURE_NAMES for backward-compatible imports.
 FEATURE_NAMES = DEFAULT_FEATURE_NAMES
 
 
