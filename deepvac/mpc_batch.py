@@ -1,17 +1,8 @@
 """Vectorized GRU+MPC rollouts: score a whole candidate population in one batch.
 
-deepvac/mpc.py rolls out one PID candidate at a time, which is fine offline but
-far too slow to replan against a live chamber: one GRU forward per candidate per
-horizon step costs ~2.9 ms, so a 256-candidate / 3-iteration / 40-step CEM
-decision needs ~281 s. Batching the population into a single forward drops the
-per-candidate cost to ~0.10 ms and the same decision to ~3 s, which fits inside a
-5 s replan interval.
-
-The plant semantics here are a faithful vectorization of gru_common.ChamberPID,
-gru_common.CodesysDiff, and deepvac.mpc.step_state -- tests/unit/test_mpc_batch.py
-asserts this module and deepvac.mpc.rollout_constant_pid agree numerically.
-Only i_part, diff.prev_value, and diff.filter_out carry across steps; every other
-PID term is recomputed, so those three are the whole vectorized state.
+A vectorization of gru_common.ChamberPID, gru_common.CodesysDiff and
+deepvac.mpc.step_state. Only i_part, diff.prev_value and diff.filter_out carry
+across steps; every other PID term is recomputed.
 """
 
 from __future__ import annotations
@@ -288,7 +279,7 @@ def rollout_population(
         next_temp = temp + batched_predict_delta(model, checkpoint, windows, device)
 
         bad = ~np.isfinite(next_temp) | (np.abs(next_temp) > max_abs_temp)
-        # Matches the scalar path: nan_to_num only, no clamping of finite outliers.
+        # Non-finite values only; finite outliers are left alone.
         next_temp = np.nan_to_num(next_temp, nan=max_abs_temp, posinf=max_abs_temp, neginf=-max_abs_temp)
 
         temps[:, step] = next_temp

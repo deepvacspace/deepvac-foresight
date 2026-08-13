@@ -1,9 +1,4 @@
-"""Model-agnostic PyTorch dataset helper shared by the GRU and LSTM plant models.
-
-The GRU/LSTM network architectures themselves (gru/model.py:GRUModel,
-lstm/model.py:LSTMModel) are intentionally separate -- they use different
-recurrent cells. SequenceDataset was a byte-identical copy in both files.
-"""
+"""Model-agnostic PyTorch dataset helper shared by the GRU and LSTM plant models."""
 
 from __future__ import annotations
 

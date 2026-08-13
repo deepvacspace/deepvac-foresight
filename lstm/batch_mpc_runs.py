@@ -2,10 +2,8 @@
 """
 Batch runner for mpc_lstm.py.
 
-Batch orchestration (command construction, summary discovery/flattening,
-result ranking) is shared with gru/batch_mpc_runs.py via
-deepvac.artifacts.run_batch_scenarios; this file only defines the LSTM-MPC
-scenario matrix and this script's own defaults.
+Defines the LSTM-MPC scenario matrix and this script's defaults; the batch
+orchestration itself is deepvac.artifacts.run_batch_scenarios.
 """
 
 from __future__ import annotations

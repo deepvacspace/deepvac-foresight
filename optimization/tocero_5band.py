@@ -129,8 +129,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--read-retry-delay-s", type=float, default=0.25)
 	ap.add_argument("--max-consecutive-failures", type=int, default=10)
 
-	# Kept separate from the 3-band history/summary: the run summaries here carry
-	# 15 PID columns instead of 9, so they must not share a CSV.
+	# Separate from the 3-band history: these summaries carry 15 PID columns.
 	ap.add_argument("--history-root", default="history_5_bands")
 	ap.add_argument("--samples-csv", default="run_samples.csv")
 	ap.add_argument("--runs-csv", default="run_summary.csv")

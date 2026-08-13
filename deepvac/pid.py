@@ -1,10 +1,4 @@
-"""PID coefficient bounds, banding, scheduling, and TCP readback.
-
-Consolidates logic that used to live in utils/utils.py (band scheduling,
-random selection, TCP readback -- used by optimization/) and, byte-for-byte
-duplicated, in gru/mpc_gru.py and lstm/mpc_lstm.py (bounds/clipping for the
-MPC candidate optimizers).
-"""
+"""PID coefficient bounds, banding, scheduling, and TCP readback."""
 
 from __future__ import annotations
 

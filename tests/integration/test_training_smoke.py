@@ -1,13 +1,9 @@
 """Integration smoke test for the GRU training pipeline
 (gru/train_gru.py, sharing deepvac/datasets.py with lstm/train_lstm.py).
 
-Trains a tiny model for 2 epochs on synthetic data. This asserts the
-pipeline runs end-to-end and produces a well-formed, loadable checkpoint
-plus a validation report with finite metrics -- it does NOT assert anything
-about model quality (that would be flaky for a 2-epoch/4-hidden-unit model
-on synthetic data). Marked slow: this is the one test in the suite that
-actually trains a neural network, so it's excluded from the fast default
-loop and run explicitly (`pytest -m slow`).
+Trains a tiny model for 2 epochs on synthetic data and asserts the pipeline runs
+end to end, producing a loadable checkpoint and a validation report with finite
+metrics. Model quality is not asserted. Marked slow (`pytest -m slow`).
 """
 
 from __future__ import annotations

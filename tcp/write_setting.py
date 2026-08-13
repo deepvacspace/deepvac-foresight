@@ -84,7 +84,7 @@ def replace_one_temp_pid_row_and_verify(
     print(f"  p1d{row} = {kd}")
     print()
 
-    # Important: do not wait for reply on write
+    # The controller sends no reply to a write.
     write_full_p1_no_reply(to_send, host=host, port=port, timeout=timeout)
 
     time.sleep(settle_s)

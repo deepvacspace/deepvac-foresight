@@ -39,14 +39,12 @@ from deepvac.artifacts import iter_run_dirs, save_json
 BANDS_3 = ("far", "mid", "near")
 BANDS_5 = ("very_far", "far", "mid", "near", "very_near")
 
-# Kept for callers that import the 3-band layout directly (optimization/training_loop.py).
 BANDS = BANDS_3
 
 BAND_SCHEMES: Dict[int, Tuple[str, ...]] = {3: BANDS_3, 5: BANDS_5}
 
-# Band boundaries, outermost first. These mirror the --cross-band-N crossings in
-# optimization/tocero_3band.py and optimization/tocero_5band.py so that every
-# analysis band contains samples from exactly one PID triplet.
+# Band boundaries, outermost first. Mirror the --cross-band-N crossings in
+# optimization/tocero_3band.py and optimization/tocero_5band.py.
 DEFAULT_THRESHOLDS: Dict[int, Tuple[float, ...]] = {
     3: (10.0, 3.0),
     5: (12.0, 8.0, 5.0, 1.0),
@@ -64,7 +62,7 @@ ROLE_APPROACH = "approach"
 ROLE_BRAKE = "brake"
 ROLE_SETTLE = "settle"
 
-# Pre-generalization column names still read out of band_metrics.csv by gru/.
+# Column aliases read out of band_metrics.csv by gru/.
 LEGACY_METRIC_ALIASES: Dict[str, Dict[str, str]] = {
     ROLE_APPROACH: {"band_mae": "far_mae", "time_to_exit_band": "time_to_reach_mid_band"},
     ROLE_BRAKE: {"band_mae": "mid_mae"},
@@ -287,7 +285,7 @@ def build_arg_parser(band_mode: Optional[int] = None) -> argparse.ArgumentParser
         ),
     )
     if len(bands) == 3:
-        # Legacy spelling of --band-thresholds, kept so existing 3-band invocations still work.
+        # Alternative spelling of --band-thresholds for 3-band invocations.
         ap.add_argument("--far-threshold", type=float, default=10.0)
         ap.add_argument("--near-threshold", type=float, default=3.0)
 
@@ -326,11 +324,6 @@ def build_arg_parser(band_mode: Optional[int] = None) -> argparse.ArgumentParser
     ap.add_argument("--suggestions-dir", default=str(OUTPUT_DIR / "band_bo_suggestions"))
 
     return ap
-
-
-# EI/LCB/EIG acquisition, parse_bounds, and save_json now come from
-# deepvac.metrics / deepvac.artifacts (see imports above) instead of being
-# defined here -- they were copy-pasted duplicates of utils/bo_common.py.
 
 
 def format_number(value: object) -> str:
@@ -854,8 +847,7 @@ def compute_run_band_metrics(
             if k not in rec:
                 rec[k] = v
 
-        # gru/gp_build.py and gru/mpc_build.py read band_metrics.csv by the
-        # pre-generalization column names, so keep those spellings populated.
+        # Aliased spellings read by gru/gp_build.py and gru/mpc_build.py.
         for new_key, legacy_key in LEGACY_METRIC_ALIASES.get(roles[band], {}).items():
             if new_key in metrics:
                 rec[legacy_key] = metrics[new_key]
@@ -884,7 +876,6 @@ def compute_all_run_metrics(args: argparse.Namespace) -> pd.DataFrame:
         try:
             records = compute_run_band_metrics(run_dir, telemetry_csv, args)
             all_records.extend(records)
-            # print(f"[OK] metrics: {run_dir} - {telemetry_csv.name}")
         except Exception as exc:
             print(f"[WARN] skipped {run_dir}: {exc}")
 

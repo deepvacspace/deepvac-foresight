@@ -1,16 +1,11 @@
 """Shared fixtures for the deepvac test suite.
 
-Two kinds of synthetic data get reused across unit and integration tests:
+Two kinds of synthetic data are reused across unit and integration tests:
 
 - A `history_root` of synthetic run_samples.csv files (write_synthetic_run),
-  standing in for optimization/run_history/ -- enough real structure
-  (elapsed_s, temp approaching temp_ref, constant PID, zeroed control terms)
-  to exercise deepvac.datasets' loading/sequence-building/splitting without
-  needing real chamber telemetry.
-- A tiny, fast-to-train GRU checkpoint (tiny_gru_checkpoint) in the exact
-  torch.save() shape gru/gru_common.py:load_model expects, so MPC rollout,
-  checkpoint round-trip, and ONNX export tests don't need a real trained
-  model.
+  standing in for optimization/run_history/.
+- A tiny GRU checkpoint (tiny_gru_checkpoint) in the torch.save() shape
+  gru/gru_common.py:load_model expects.
 """
 
 from __future__ import annotations

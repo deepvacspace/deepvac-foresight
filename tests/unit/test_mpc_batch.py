@@ -1,9 +1,4 @@
-"""deepvac.mpc_batch must reproduce deepvac.mpc's scalar rollout exactly.
-
-The batched rollout is a hand-vectorized copy of ChamberPID / CodesysDiff /
-step_state, so it can silently drift from the scalar path it replaces. These
-tests pin the two together.
-"""
+"""Tests that deepvac.mpc_batch reproduces deepvac.mpc's scalar rollout exactly."""
 
 from __future__ import annotations
 

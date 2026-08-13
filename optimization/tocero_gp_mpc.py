@@ -2,22 +2,17 @@
 """Two-phase live chamber run: GP-chosen far-band PID, then GRU+MPC close in.
 
 Chamber I/O (temp_ref jobs, PID writes with readback verification, preconditioning,
-CSV artifacts) follows optimization/tocero_3band.py. The scheduling is different:
+CSV artifacts) follows optimization/tocero_3band.py.
 
   Phase 1 -- "gp_far", while abs(temp - target) > --far-band (10 deg by default).
     One PID triplet, chosen once by the far-band Gaussian Process from
-    optimization/band_bo_gp.py, held for the whole approach. There is only this
-    one band, so the GP's far-band cost (approach MAE + time to reach the band
-    edge) is exactly the objective this phase is judged on.
+    optimization/band_bo_gp.py, held for the whole approach.
 
   Phase 2 -- "gru_mpc", from the first time the chamber is inside --far-band.
     The GRU plant model plus receding-horizon MPC re-infer the PID every
     --mpc-hold-s seconds (5 by default) from the live state, and each decision is
-    written to the chamber.
-
-The MPC uses deepvac.mpc_batch, which scores the whole candidate population in
-one batched GRU forward. The scalar deepvac.mpc path costs ~281 s per default
-CEM decision on CPU, which cannot hold a 5 s cadence; batched it is ~3 s.
+    written to the chamber. Candidates are scored in one batched GRU forward via
+    deepvac.mpc_batch.
 
 SAFETY: this writes PID values and temp_ref jobs to a real chamber over TCP and
 has no independent interlock or emergency stop. --dry-run exercises the whole
@@ -77,11 +72,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     # --dt-s, --target-temp, --duration-s, PID bounds, CEM/optimizer settings,
-    # history-seeding and --max-abs-temp all come from the shared MPC flag set.
+    # history-seeding and --max-abs-temp.
     _mpc.add_common_mpc_args(ap)
 
-    # Horizon/hold and cost weights are mpc_gru.py's design, restated here because
-    # mpc_gru.build_arg_parser() also owns --checkpoint/--output-dir defaults we replace.
+    # Horizon/hold and cost weights, following mpc_gru.py's cost design.
     ap.add_argument("--mpc-horizon-s", type=float, default=80.0,
                     help="Future horizon optimized at every MPC decision.")
     ap.add_argument("--mpc-hold-s", type=float, default=5.0,
@@ -176,18 +170,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def build_gp_namespace(args: argparse.Namespace) -> argparse.Namespace:
-    """A band_bo_gp namespace configured for a single far band at --far-band.
-
-    band_bo_gp's own parser is the source of truth for every knob it reads; this
-    only overrides the ones this script exposes. --far-threshold is pinned to
-    --far-band so the GP scores exactly the region phase 1 controls.
-    """
+    """A band_bo_gp namespace configured for a single far band at --far-band."""
     gp_args = band_bo.build_arg_parser(band_mode=3).parse_args([])
 
     gp_args.history_root = args.gp_history_root
     gp_args.far_threshold = float(args.far_band)
-    # near_threshold only splits the mid/near bands, which this script never uses,
-    # but it must stay below far_threshold for classify_bands to be well formed.
+    # Unused here, but must stay below far_threshold for classify_bands.
     gp_args.near_threshold = min(float(gp_args.near_threshold), float(args.far_band) / 2.0)
     gp_args.min_band_samples = int(args.gp_min_band_samples)
     gp_args.acquisition = args.gp_acquisition
@@ -466,8 +454,7 @@ def run(args: argparse.Namespace) -> Dict[str, object]:
         f"| GP far-band bounds kp={args.gp_kp_bounds} ki={args.gp_ki_bounds} kd={args.gp_kd_bounds}"
     )
 
-    # Decisions can only fire on a sampling tick, so a hold that is not a whole
-    # number of samples rounds up in practice.
+    # Decisions can only fire on a sampling tick.
     hold_in_samples = float(args.mpc_hold_s) / float(args.dt_s)
     if abs(hold_in_samples - round(hold_in_samples)) > 1e-9:
         print(
@@ -570,8 +557,7 @@ def run(args: argparse.Namespace) -> Dict[str, object]:
                     f"[run {run_id}] WARNING decision {len(decisions)} took {took:.2f}s "
                     f"> --mpc-hold-s {args.mpc_hold_s:g}s; cadence is slipping"
                 )
-            # Advance on a fixed schedule so compute time does not accumulate into
-            # the interval. Only resync if a decision overran its whole slot.
+            # Fixed schedule; resync only when a decision overran its whole slot.
             next_decision += float(args.mpc_hold_s)
             behind = time.time() - next_decision
             if behind > 0:

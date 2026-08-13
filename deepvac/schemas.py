@@ -1,19 +1,13 @@
 """Canonical feature names and lightweight run/telemetry data shapes.
 
-These document the CSV/JSON conventions used throughout the toolkit. They
-are intentionally plain dataclasses (no validation library dependency) --
-callers that read CSV/JSON directly with pandas are unaffected; this module
-exists so the shape of a "run sample" or "PID bounds" is defined once
-instead of being implicit in each script.
+These document the CSV/JSON conventions used throughout the toolkit.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# One-step plant-model feature vector, in column order. Shared verbatim by
-# gru/gru_common.py, deepvac/datasets.py (training), and the GRU/LSTM MPC
-# schedulers (deepvac/mpc.py) -- previously three independent literal copies.
+# One-step plant-model feature vector, in column order.
 DEFAULT_FEATURE_NAMES = [
     "temp",
     "temp_ref",
@@ -41,9 +35,8 @@ class PIDBounds:
 class RunSample:
     """One row of a run's `run_samples.csv` / telemetry CSV.
 
-    `timestamp` (physical runs, optimization/) and `elapsed_s` (offline
-    training/simulation, gru/ + lstm/) are alternative time bases -- most
-    loaders accept either and derive the other.
+    `timestamp` and `elapsed_s` are alternative time bases; most loaders accept
+    either and derive the other.
     """
 
     timestamp: float

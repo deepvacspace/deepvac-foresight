@@ -1,11 +1,4 @@
-"""
-from tcp.tcp_common import (
-        DEFAULT_HOST,
-        DEFAULT_PORT,
-        DEFAULT_TIMEOUT,
-        request_settings
-)
-"""
+"""Print every setting the chamber controller reports over TCP."""
 
 from tcp_common import request_settings
 

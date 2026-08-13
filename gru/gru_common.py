@@ -10,19 +10,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401  (re-exported for callers)
+from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401
 
 
 def _ensure_sklearn_stub() -> None:
     """Register minimal sklearn stubs so torch.load can unpickle StandardScaler
     objects from checkpoints without requiring scikit-learn to be installed.
 
-    Pickle stores the *defining* module of a class. Depending on the sklearn
-    version used when the checkpoint was saved that path is one of:
+    Both defining module paths are registered, since the one a checkpoint
+    references depends on the sklearn version that saved it:
         sklearn.preprocessing._data.StandardScaler   (sklearn >= 0.24)
         sklearn.preprocessing.data.StandardScaler    (sklearn < 0.24)
-    We register both, plus the top-level alias, and mark every stub module as a
-    package (``__path__ = []``) so Python allows sub-module lookups."""
+    """
     if "sklearn" in sys.modules:
         return
 
@@ -191,7 +190,7 @@ class ChamberPID:
         u = self.p_part + self.i_part + self.d_part
         u = limit(self.u_min, u, self.u_max)
 
-        # For logging, same as the ST code.
+        # Clipped for logging only.
         self.p_part = limit(self.u_min, self.p_part, self.u_max)
 
         return u, self.p_part, self.i_part, self.d_part

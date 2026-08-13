@@ -202,6 +202,33 @@ Writes a checkpoint to `gru\validation_t1\gru_t1.pt`, a training-curve plot to
 `gru\plots_t1\`, and a `validation_report_t1.json` you should read before
 trusting the model for anything downstream.
 
+This trains and selects on a **single step**, while the MPC unrolls the model for
+its whole horizon. On the archived reconstruction run that gap costs a factor of
+~22 (1-step MAE 0.019 °C vs free-running MAE 0.406 °C, of which 0.284 °C is bias).
+`gru\train_gru_rollout.py` closes it:
+
+```powershell
+python -m gru.train_gru_rollout --init-from gru\validation_t1\gru_t1.pt --rollout-steps 40 --epochs 40
+```
+
+- **Loss over an unrolled rollout.** Gradients flow through an N-step unroll in
+  which temperature is fed back from the model's own prediction and the PID/diff
+  controller is simulated in-graph, matching `deepvac.mpc.step_state`. Only
+  `temp_ref`/`kp`/`ki`/`kd` stay teacher-forced, since those are exogenous.
+  `--curriculum-epochs` ramps the unroll from 1 step up to `--rollout-steps`.
+- **Selection on rollout error**, not 1-step loss. Both are printed each epoch,
+  and the report includes a per-horizon-step drift curve — use it to pick an
+  `--mpc-horizon-s` where drift is still smaller than the effect you're resolving.
+- **`--split-by pid-config`** keeps runs sharing a PID configuration in one split.
+  `--config-key first-triplet` groups by far-band entry gains (57 groups over 205
+  runs); under a run-level split **67%** of held-out far-band configurations
+  already appear in training, so those test numbers measure interpolation rather
+  than the generalization the MPC actually needs. At the whole-trajectory
+  granularity (`--config-key triplet-set`, 171 groups) the leak is 19%.
+
+The checkpoint layout is unchanged, so the result drops straight into
+`mpc_gru.py`, `mpc_batch.py`, and `simulate_gru.py`.
+
 ### 2. Offline simulation (no hardware)
 
 ```powershell
@@ -262,6 +289,37 @@ early at `--mpc-time-budget-s` (default 60% of the hold) and the run reports
 `mpc_overruns`. `--mpc-hold-s` should be a whole multiple of `--dt-s`, since
 decisions can only fire on a sampling tick.
 
+
+### 5. Zero-overshoot PID search (writes to the chamber)
+
+```powershell
+python -m optimization.collect_runs --knots 4 --n-configs 6 --repeats 4 --dry-run
+python -m optimization.settling_metrics --history-root run_history_profiles
+```
+
+`collect_runs.py` drives each run from a **time-indexed PID profile**: K knots
+spread over `--profile-span-s`, re-evaluated and written every
+`--update-interval-s` (3 s). `--knots 1` is a single fixed triplet, so "one fixed
+set" and "changing continuously" are the same code path. `--profile-mode linear`
+ramps between knots, which avoids the control discontinuity an abrupt kp change
+causes (`p_part = error/kp` and `d_part = (kd/kp)*(-diff)` rescale instantly while
+`i_part` carries over); `step` is the abrupt comparison. It logs **every phase
+including the reheat**, and gates the test start on temperature *and* drift rate so
+repeats share an initial condition.
+
+`settling_metrics.py` splits each run into setpoint episodes and scores four
+things separately rather than as `tail_mae + 10*overshoot^2`: transient overshoot,
+steady jitter, steady bias, and settling time. Configurations are ranked
+zero-overshoot first, then by jitter and bias; nothing is dropped, so near misses
+stay visible. Across replicates, overshoot is summarised by its **worst** run,
+since zero overshoot is a hard requirement.
+
+Two numbers worth knowing before running a campaign. The logged temperature is
+quantised at ~0.044 °C, so "zero overshoot" can only mean "within one sensor
+count" (`--overshoot-tol` defaults to 0.05). And transient overshoot has a
+within-configuration SD of ~0.1 °C against a between-configuration SD of
+~0.14 °C, so a single run cannot rank two profiles — hence `--repeats 4`, whereas
+jitter and bias (SNR ~7-16) are fine from one run.
 
 ## Packaging a model for the desktop apps
 

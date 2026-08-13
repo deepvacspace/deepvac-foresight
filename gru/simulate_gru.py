@@ -386,9 +386,8 @@ def initialize_codesys_diff_for_sim(
 ) -> CodesysDiff:
     """Initialize Diff at the simulation boundary.
 
-    The corrected validation showed the important part is not one update per CSV row,
-    but 0.1 s internal updates. For closed-loop simulation, the safest default is
-    first_temp: prev_value=current predicted temperature and zero filter state.
+    Default mode first_temp seeds prev_value with the current predicted
+    temperature and zeroes the filter state.
     """
     diff = CodesysDiff()
     current_temp = float(df["temp"].iloc[warmup_end_idx])
@@ -407,8 +406,7 @@ def initialize_codesys_diff_for_sim(
         return diff
 
     if mode == "infer_from_d":
-        # Old behavior: infer diff.out from the logged D term at the warm-up row.
-        # Useful for comparison, but it can inject a stale derivative state.
+        # Infer diff.out from the logged D term at the warm-up row.
         warmup_kp = float(df["kp"].iloc[warmup_end_idx])
         warmup_kd = float(df["kd"].iloc[warmup_end_idx])
         diff.prev_value = current_temp

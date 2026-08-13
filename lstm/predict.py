@@ -148,16 +148,12 @@ def predict_run_temperatures(
     device: torch.device,
 ) -> np.ndarray:
     """
-    Real-history-fed prediction.
+    Real-history-fed, non-recursive prediction.
 
-    This is NOT recursive.
+    For every target index, predict the temperature pred_horizon samples ahead
+    from the real logged samples before it.
 
-    For every target index:
-        - use only the real logged samples before it
-        - predict the target temperature pred_horizon samples ahead
-        - do not insert previous predictions into future input windows
-
-    General indexing:
+    Indexing:
         input window = rows [start_idx : end_idx]
         target       = temp[target_idx]
 
@@ -192,9 +188,6 @@ def predict_run_temperatures(
             start_idx = target_idx - seq_len - pred_horizon + 1
             end_idx = target_idx - pred_horizon
 
-            # Real-history-fed prediction:
-            # This window uses only real logged data.
-            # No previous prediction is inserted back into the input.
             window = work.iloc[start_idx : end_idx + 1].copy()
 
             if len(window) != seq_len:
