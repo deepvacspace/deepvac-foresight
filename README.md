@@ -8,19 +8,18 @@ simulation and model-predictive PID selection.
 
 ## ⚠️ Safety
 
-This toolkit can write PID coefficients directly to a real chamber
-controller over an **unauthenticated, unencrypted** TCP connection
-(`tcp/tcp_common.py`). **`--tcp-host`/`--tcp-port` There is no
-independent supervisory interlock, confirmation prompt, or emergency stop
-built into any of them.
+This toolkit can write PID coefficients directly to a real chamber controller
+over an **unauthenticated, unencrypted** TCP connection (`tcp/tcp_common.py`,
+targeted with `--tcp-host`/`--tcp-port`). There is no independent supervisory
+interlock, confirmation prompt, or emergency stop built into any of it.
 
-- `optimization/mpc_experiment.py`, `gp_experiment.py`, `tocero_3band.py`,
-  `tocero_5band.py`, `tocero_gp_mpc.py`, `random_pid_tests.py`, and
-  `training_loop.py` all write PID values over TCP. `tocero_gp_mpc.py` accepts
-  `--dry-run` to exercise its full schedule without writing anything.
-- Anything under `gru/`, `lstm/`, and `deepvac/mpc.py` that reads
-  "simulation"/"MPC scheduler" runs entirely offline against a trained
-  neural-network plant model.
+- These write PID values over TCP: `optimization/mpc_experiment.py`,
+  `gp_experiment.py`, `tocero_3band.py`, `tocero_5band.py`, `tocero_gp_mpc.py`,
+  `collect_runs.py`, `random_pid_tests.py`, `training_loop.py`.
+  `tocero_gp_mpc.py` and `collect_runs.py` accept `--dry-run` to exercise their
+  full schedule without writing.
+- Everything under `gru/`, `lstm/`, and `deepvac/mpc.py` runs offline against a
+  trained plant model.
 
 ## Architecture
 
@@ -90,18 +89,14 @@ flowchart TB
     Twin_ckpt -->|"deepvac package-model\n(ONNX export)"| Control2
 ```
 
-**Data flow, in words:** the chamber writes/reads telemetry over
-`tcp/tcp_common.py`. `optimization/` runs either write live PID values back to
-the chamber (`*_experiment.py`, `tocero_*.py`, `training_loop.py`) or fit GP-BO
-models to past runs and suggest new candidates (`band_bo_gp.py`,
-`compute_one_model.py`). Every run's samples/summaries land as CSV/JSON under
-a `run_history`-style directory. `gru/` and `lstm/` train neural plant models
-on that same history, then use the trained checkpoint for pure offline
-simulation (`simulate_*.py`) or a receding-horizon MPC scheduler
-(`mpc_gru.py` / `mpc_lstm.py`, sharing their rollout/optimizer loop via
-`deepvac/mpc.py`). `deepvac/` holds: protocol re-export, PID
-bounds/banding, cost/acquisition math, dataset/sequence building, and
-run-artifact persistence.
+**Data flow:** telemetry moves over `tcp/tcp_common.py`. `optimization/` scripts
+either write live PID values back to the chamber (`*_experiment.py`,
+`tocero_*.py`, `collect_runs.py`, `training_loop.py`) or fit GP-BO models to past
+runs and suggest candidates (`band_bo_gp.py`, `compute_one_model.py`). Every run's
+samples and summaries land as CSV/JSON under a `run_history`-style directory.
+`gru/` and `lstm/` train plant models on that history, then use the checkpoint for
+offline simulation (`simulate_*.py`) or a receding-horizon MPC scheduler
+(`mpc_gru.py` / `mpc_lstm.py`, both over `deepvac/mpc.py`).
 
 ### Package layout
 
@@ -111,12 +106,10 @@ run-artifact persistence.
   read/write scripts.
 - `gru/`, `lstm/` -- GRU/LSTM plant-model training, offline simulation, and
   MPC PID scheduling. Each owns its own `validation_t1/`, `plots_t1/`,
-  `mlruns/` output directories (resolved relative to the script's own file
-  location, not your working directory). `lstm/lstm.py` + `lstm/predict.py`
-  are an older, separate LSTM pipeline (pickle-based bundles, its own feature
-  set) kept only for comparison -- the actively maintained pipeline is
-  `lstm/train_lstm.py`, which shares `deepvac/datasets.py` with
-  `gru/train_gru.py`.
+  `mlruns/` output directories, resolved relative to the script's own file
+  location rather than your working directory. Use `lstm/train_lstm.py`;
+  `lstm/lstm.py` + `lstm/predict.py` are a separate pickle-based pipeline with
+  its own feature set, kept for comparison only.
 - `optimization/` -- Bayesian optimization / AI advisor, live-chamber replay
   scripts, and run analysis/plotting.
 
@@ -151,10 +144,9 @@ overwrite it with the CPU build.
 
 ## Unified CLI
 
-One entry point, `deepvac`, dispatches to every script below (it forwards
-whatever flags you pass through to that script's own argument parser
-unchanged -- `deepvac train-gru --help` is identical to
-`python -m gru.train_gru --help`):
+One entry point, `deepvac`, dispatches to every script below, forwarding your
+flags to that script's own argument parser unchanged -- `deepvac train-gru --help`
+is identical to `python -m gru.train_gru --help`:
 
 ```powershell
 deepvac --list                 # every subcommand with a one-line description
@@ -199,47 +191,40 @@ package-qualified imports (`python -m gru.train_gru`, not
 python -m gru.train_gru --history-root optimization\run_history --window-steps 60 --epochs 50
 ```
 Writes a checkpoint to `gru\validation_t1\gru_t1.pt`, a training-curve plot to
-`gru\plots_t1\`, and a `validation_report_t1.json` you should read before
-trusting the model for anything downstream.
-
-This trains and selects on a **single step**, while the MPC unrolls the model for
-its whole horizon. On the archived reconstruction run that gap costs a factor of
-~22 (1-step MAE 0.019 °C vs free-running MAE 0.406 °C, of which 0.284 °C is bias).
-`gru\train_gru_rollout.py` closes it:
+`gru\plots_t1\`, and a `validation_report_t1.json`. This trains and selects on a
+single step; `gru\train_gru_rollout.py` trains and selects on a multi-step
+rollout instead, matching how the MPC unrolls the model:
 
 ```powershell
 python -m gru.train_gru_rollout --init-from gru\validation_t1\gru_t1.pt --rollout-steps 40 --epochs 40
 ```
 
-- **Loss over an unrolled rollout.** Gradients flow through an N-step unroll in
-  which temperature is fed back from the model's own prediction and the PID/diff
-  controller is simulated in-graph, matching `deepvac.mpc.step_state`. Only
-  `temp_ref`/`kp`/`ki`/`kd` stay teacher-forced, since those are exogenous.
-  `--curriculum-epochs` ramps the unroll from 1 step up to `--rollout-steps`.
-- **Selection on rollout error**, not 1-step loss. Both are printed each epoch,
-  and the report includes a per-horizon-step drift curve — use it to pick an
-  `--mpc-horizon-s` where drift is still smaller than the effect you're resolving.
+- **`--rollout-steps`** sets the unroll length the loss is computed over.
+  Temperature is fed back from the model's own prediction and the PID/diff
+  controller is simulated in-graph; only `temp_ref`/`kp`/`ki`/`kd` are read from
+  the log. `--curriculum-epochs` ramps the unroll up from 1 step.
+- Early stopping and checkpointing use rollout MAE. Both it and the 1-step loss
+  print each epoch, and the report carries a per-horizon-step drift curve — read
+  it when choosing `--mpc-horizon-s`.
 - **`--split-by pid-config`** keeps runs sharing a PID configuration in one split.
-  `--config-key first-triplet` groups by far-band entry gains (57 groups over 205
-  runs); under a run-level split **67%** of held-out far-band configurations
-  already appear in training, so those test numbers measure interpolation rather
-  than the generalization the MPC actually needs. At the whole-trajectory
-  granularity (`--config-key triplet-set`, 171 groups) the leak is 19%.
+  `--config-key first-triplet` groups by far-band entry gains, `triplet-set` by
+  every triplet in the run. The report's `test_configs_seen_in_train` counts how
+  many held-out configurations leaked into training.
 
-The checkpoint layout is unchanged, so the result drops straight into
-`mpc_gru.py`, `mpc_batch.py`, and `simulate_gru.py`.
+Output goes to `gru\validation_rollout\`. The checkpoint layout matches
+`train_gru.py`, so it drops straight into `mpc_gru.py`, `mpc_batch.py`, and
+`simulate_gru.py`.
 
 ### 2. Offline simulation (no hardware)
 
 ```powershell
 python -m gru.simulate_gru --checkpoint gru\validation_t1\gru_t1.pt --history-root optimization\run_history
 ```
-Picks a historical run (or a specific one via `--run-id`) from
-`--history-root`, replays it in closed loop through the trained GRU +
-`ChamberPID`, and reports reconstruction error against the real logged
-trajectory -- purely offline, safe to run repeatedly. For a from-scratch
-scenario (arbitrary start/target temperature, no historical run needed), use
-the MPC scheduler's own rollout instead:
+Picks a historical run from `--history-root` (or a specific one via `--run-id`),
+replays it in closed loop through the trained GRU + `ChamberPID`, and reports
+reconstruction error against the logged trajectory. For an arbitrary
+start/target temperature with no historical run, use the MPC scheduler's own
+rollout instead:
 `python -m gru.mpc_gru --checkpoint gru\validation_t1\gru_t1.pt --cpu --start-temp 27 --target-temp 0 --duration-s 1200`.
 
 ### 3. PID recommendation (Bayesian optimization, offline)
@@ -260,8 +245,8 @@ python -m optimization.band_bo_gp --band-mode 5 --history-root optimization\hist
 ```
 
 The analysis band boundaries must line up with the runner's crossings, or a
-band's samples get attributed to the wrong PID triplet. The defaults already
-match (`10,3` for 3 bands, `12,8,5,1` for 5); if you change the runner's
+band's samples get attributed to the wrong PID triplet. The defaults match
+(`10,3` for 3 bands, `12,8,5,1` for 5); if you change the runner's
 `--cross-band-N` values, pass the same numbers to `--band-thresholds`.
 
 Either mode writes a ready-to-paste `PID_SCHEDULES` block to
@@ -282,13 +267,11 @@ inside the band, the GRU plant model plus MPC re-infer the PID every
 to actually drive the chamber.
 
 MPC decisions are scored with `deepvac/mpc_batch.py`, which evaluates the whole
-candidate population in one batched GRU forward. The scalar `deepvac/mpc.py` path
-costs ~281 s for a default CEM decision on CPU and cannot hold a 5 s cadence;
-batched, the same decision is ~3-4 s. If a decision still overruns, CEM stops
-early at `--mpc-time-budget-s` (default 60% of the hold) and the run reports
-`mpc_overruns`. `--mpc-hold-s` should be a whole multiple of `--dt-s`, since
-decisions can only fire on a sampling tick.
-
+candidate population in one batched GRU forward (~3-4 s per default CEM decision
+on CPU). If a decision overruns its hold, CEM stops early at
+`--mpc-time-budget-s` (default 60% of the hold) and the run reports
+`mpc_overruns`. Make `--mpc-hold-s` a whole multiple of `--dt-s`; decisions can
+only fire on a sampling tick.
 
 ### 5. Zero-overshoot PID search (writes to the chamber)
 
@@ -297,29 +280,27 @@ python -m optimization.collect_runs --knots 4 --n-configs 6 --repeats 4 --dry-ru
 python -m optimization.settling_metrics --history-root run_history_profiles
 ```
 
-`collect_runs.py` drives each run from a **time-indexed PID profile**: K knots
-spread over `--profile-span-s`, re-evaluated and written every
-`--update-interval-s` (3 s). `--knots 1` is a single fixed triplet, so "one fixed
-set" and "changing continuously" are the same code path. `--profile-mode linear`
-ramps between knots, which avoids the control discontinuity an abrupt kp change
-causes (`p_part = error/kp` and `d_part = (kd/kp)*(-diff)` rescale instantly while
-`i_part` carries over); `step` is the abrupt comparison. It logs **every phase
-including the reheat**, and gates the test start on temperature *and* drift rate so
-repeats share an initial condition.
+`collect_runs.py` drives each run from a time-indexed PID profile: `--knots` PID
+triplets spread over `--profile-span-s`, re-evaluated and written to the chamber
+every `--update-interval-s` (3 s). `--knots 1` is a single fixed triplet;
+`--profile-mode linear` ramps between knots, `step` jumps at each one. It logs
+every phase including the reheat, and gates the test start on both temperature
+(`--start-temp-tol`) and drift rate (`--start-rate-tol`) so repeats share an
+initial condition. `--repeats` runs of each configuration are interleaved. The
+plan is written to `optimization\output\profile_plan.json`; pass it back as
+`--plan-file` to resume an interrupted campaign.
 
-`settling_metrics.py` splits each run into setpoint episodes and scores four
-things separately rather than as `tail_mae + 10*overshoot^2`: transient overshoot,
-steady jitter, steady bias, and settling time. Configurations are ranked
-zero-overshoot first, then by jitter and bias; nothing is dropped, so near misses
-stay visible. Across replicates, overshoot is summarised by its **worst** run,
-since zero overshoot is a hard requirement.
+`settling_metrics.py` splits each run into setpoint episodes and scores transient
+overshoot, steady jitter, steady bias, and settling time separately. It writes
+`settling_episodes.csv` (per episode), `settling_configs.csv` (per configuration,
+ranked zero-overshoot first, then by jitter and bias), and `settling_report.json`
+under `optimization\output\`. Across replicates overshoot is summarised by its
+worst run; nothing is filtered out.
 
-Two numbers worth knowing before running a campaign. The logged temperature is
-quantised at ~0.044 °C, so "zero overshoot" can only mean "within one sensor
-count" (`--overshoot-tol` defaults to 0.05). And transient overshoot has a
-within-configuration SD of ~0.1 °C against a between-configuration SD of
-~0.14 °C, so a single run cannot rank two profiles — hence `--repeats 4`, whereas
-jitter and bias (SNR ~7-16) are fine from one run.
+`--overshoot-tol` defaults to 0.05 °C, one count of the ~0.044 °C sensor
+quantisation. The report's `signal_to_noise` block gives the within- vs
+between-configuration spread per metric and the replicate count each would need,
+which is what `--repeats 4` is sized against.
 
 ## Packaging a model for the desktop apps
 
@@ -345,26 +326,19 @@ packaging/
 ```
 
 - **`insight`** (PySide6): stages `model.pt` plus a regenerated
-  `simulation.py` whose shared plant-model block is regenerated from this
-  repo's `deepvac/mpc.py` + the checkpoint's model class (everything above
-  the `# === END GENERATED ===` marker). `--insight-root` (default
-  `<root>/deepvac/insight`) is only ever **read** -- it's how the Simulator
-  view's hand-maintained logic below that marker (`simulate_candidate`,
-  `compute_metrics`) gets carried forward into the newly generated file.
-  Pass `--skip insight` to opt out of needing that checkout at all.
-- **`control2-client`** (C++ Qt): that app has no ONNX Runtime or LibTorch
-  linked yet, so this exports a self-contained ONNX graph -- scaling is
-  baked in, so the C++ side feeds a raw feature window and reads back a raw
-  temperature delta (°C) with no need to reimplement the checkpoint's
-  `StandardScaler`. `deepvac package-model` verifies the exported graph
-  numerically against the original PyTorch model before reporting success
-  (pass `--no-verify-onnx` to skip).
+  `simulation.py`. Everything above the `# === END GENERATED ===` marker is
+  rebuilt from this repo's `deepvac/mpc.py` and the checkpoint's model class;
+  everything below it is read from `--insight-root` (default
+  `<root>/deepvac/insight`, never written) and carried forward. Pass
+  `--skip insight` to build without that checkout.
+- **`control2-client`** (C++ Qt): exports a self-contained ONNX graph with
+  scaling baked in, so the C++ side feeds a raw feature window and reads back a
+  raw temperature delta (°C). The exported graph is verified numerically against
+  the PyTorch model; pass `--no-verify-onnx` to skip.
 
 Model types are registered in `deepvac/model_registry.py` (currently `gru`,
-`lstm`); `--model-type` is only needed to override the default resolution
-order: the checkpoint's own stamped `model_family` field first, then
-(for older checkpoints saved before that field existed) whichever
-registered type name appears as a path component. Use `--latest DIR`
-instead of `--checkpoint` to auto-pick the newest `*.pt` under a directory.
-`--output-dir` overrides where `packaging/` is created (default: current
-directory).
+`lstm`). The type is resolved from the checkpoint's stamped `model_family` field,
+falling back to whichever registered type name appears as a path component;
+`--model-type` overrides both. Use `--latest DIR` instead of `--checkpoint` to
+auto-pick the newest `*.pt` under a directory, and `--output-dir` to place
+`packaging/` somewhere other than the current directory.

@@ -1,6 +1,6 @@
 """Print every setting the chamber controller reports over TCP."""
 
-from tcp_common import request_settings
+from tcp.tcp_common import request_settings
 
 HOST = "192.168.88.248" #DEFAULT_HOST
 PORT = 4321 #DEFAULT_PORT
