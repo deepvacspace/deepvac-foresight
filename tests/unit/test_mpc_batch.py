@@ -10,7 +10,6 @@ from deepvac import mpc as _mpc
 from deepvac import mpc_batch
 
 gru_common = pytest.importorskip("gru.gru_common")
-mpc_gru = pytest.importorskip("gru.mpc_gru")
 
 CHECKPOINT = gru_common.DEFAULT_CHECKPOINT
 pytestmark = pytest.mark.skipif(
@@ -30,7 +29,9 @@ def loaded():
 def make_args(**overrides):
     import argparse
 
-    ap = mpc_gru.build_arg_parser()
+    ap = argparse.ArgumentParser()
+    _mpc.add_common_mpc_args(ap)
+    _mpc.add_mpc_cost_args(ap)
     args = ap.parse_args([])
     args.dt_s = 2.0
     args.start_temp = 25.0
@@ -72,7 +73,7 @@ def test_batched_rollout_matches_scalar_rollout(loaded):
     batched = mpc_batch.rollout_population(
         initial_state=state, candidate_pids=CANDIDATES, model=model, checkpoint=checkpoint,
         feature_names=feature_names, device=device, args=args,
-        horizon_steps=horizon_steps, cost_fn=mpc_gru.horizon_cost,
+        horizon_steps=horizon_steps, cost_fn=_mpc.horizon_cost,
     )
 
     for idx, candidate in enumerate(CANDIDATES):
@@ -80,7 +81,7 @@ def test_batched_rollout_matches_scalar_rollout(loaded):
             initial_state=state, candidate_pid=candidate, model=model, checkpoint=checkpoint,
             feature_names=feature_names, device=device, args=args,
             horizon_steps=horizon_steps, predict_fn=gru_common.predict_delta_t1,
-            cost_fn=mpc_gru.horizon_cost,
+            cost_fn=_mpc.horizon_cost,
         )
         assert batched[idx]["cost"] == pytest.approx(scalar_metrics["cost"], rel=1e-5, abs=1e-6)
         assert batched[idx]["horizon_mae"] == pytest.approx(scalar_metrics["horizon_mae"], rel=1e-5)
@@ -103,7 +104,7 @@ def test_batched_rollout_does_not_mutate_initial_state(loaded):
     mpc_batch.rollout_population(
         initial_state=state, candidate_pids=CANDIDATES, model=model, checkpoint=checkpoint,
         feature_names=feature_names, device=device, args=args,
-        horizon_steps=5, cost_fn=mpc_gru.horizon_cost,
+        horizon_steps=5, cost_fn=_mpc.horizon_cost,
     )
 
     assert (state.temp, state.pid.i_part, state.diff.prev_value, state.diff.filter_out) == before
@@ -119,7 +120,7 @@ def test_invalid_candidate_is_flagged_and_penalized(loaded):
     batched = mpc_batch.rollout_population(
         initial_state=state, candidate_pids=CANDIDATES, model=model, checkpoint=checkpoint,
         feature_names=feature_names, device=device, args=args,
-        horizon_steps=6, cost_fn=mpc_gru.horizon_cost,
+        horizon_steps=6, cost_fn=_mpc.horizon_cost,
     )
     for row in batched:
         assert row["valid"] is False
