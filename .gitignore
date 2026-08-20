@@ -72,5 +72,23 @@ credentials.json
 /lstm/mpc_pid_runs_batch/
 /lstm/old/
 /lstm/mlruns/
+/lstm/plots_t1/
+/lstm/validation_t1/
+
+# Deprecated pre-deepvac lstm scripts and their artifacts, superseded by
+# train_lstm.py / train_lstm_rollout.py and the lstm_common.py-based advisor
+# pipeline. Kept on disk, not tracked.
+/lstm/lstm.py
+/lstm/mpc_lstm.py
+/lstm/batch_mpc_runs.py
+/lstm/predict.py
+/lstm/lstm_model.pkl
+/lstm/lstm_prediction.csv
+/lstm/lstm_prediction.png
+/lstm/lstm_predictions.csv
+/lstm/lstm_test_metrics.csv
+/lstm/lstm_test_runs_10.png
+/lstm/lstm_training_10.png
+/lstm/plots/
 
 /packaging

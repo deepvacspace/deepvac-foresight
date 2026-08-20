@@ -6,6 +6,63 @@ import torch.nn as nn
 from deepvac.models import SequenceDataset  # noqa: F401  (re-exported for callers)
 
 
+class LayerNormLSTMCell(nn.Module):
+    """An LSTM cell with LayerNorm on each gate's pre-activation (Ba et al. style)."""
+
+    def __init__(self, input_size: int, hidden_size: int) -> None:
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.weight_ih = nn.Linear(input_size, 4 * hidden_size)
+        self.weight_hh = nn.Linear(hidden_size, 4 * hidden_size, bias=False)
+        self.ln_ih = nn.LayerNorm(4 * hidden_size)
+        self.ln_hh = nn.LayerNorm(4 * hidden_size)
+
+    def forward(
+        self, x: torch.Tensor, h: torch.Tensor, c: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        gi = self.ln_ih(self.weight_ih(x))
+        gh = self.ln_hh(self.weight_hh(h))
+        i_i, i_f, i_g, i_o = gi.chunk(4, dim=-1)
+        h_i, h_f, h_g, h_o = gh.chunk(4, dim=-1)
+        i_gate = torch.sigmoid(i_i + h_i)
+        f_gate = torch.sigmoid(i_f + h_f)
+        g_gate = torch.tanh(i_g + h_g)
+        o_gate = torch.sigmoid(i_o + h_o)
+        c_next = f_gate * c + i_gate * g_gate
+        h_next = o_gate * torch.tanh(c_next)
+        return h_next, c_next
+
+
+class LayerNormLSTM(nn.Module):
+    """Multi-layer batch-first stack of LayerNormLSTMCell. Drop-in for nn.LSTM's
+    forward(x) -> (output, (h_n, c_n)) shape."""
+
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.cells = nn.ModuleList([
+            LayerNormLSTMCell(input_size if i == 0 else hidden_size, hidden_size)
+            for i in range(num_layers)
+        ])
+        self.dropout = nn.Dropout(dropout) if (dropout > 0 and num_layers > 1) else None
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        batch, seq_len, _ = x.shape
+        h = [x.new_zeros(batch, self.hidden_size) for _ in range(self.num_layers)]
+        c = [x.new_zeros(batch, self.hidden_size) for _ in range(self.num_layers)]
+        outputs = []
+        for t in range(seq_len):
+            layer_input = x[:, t, :]
+            for i, cell in enumerate(self.cells):
+                h[i], c[i] = cell(layer_input, h[i], c[i])
+                layer_input = h[i]
+                if self.dropout is not None and i < self.num_layers - 1:
+                    layer_input = self.dropout(layer_input)
+            outputs.append(h[-1])
+        return torch.stack(outputs, dim=1), (torch.stack(h, dim=0), torch.stack(c, dim=0))
+
+
 class LSTMModel(nn.Module):
     def __init__(
         self,
@@ -13,16 +70,23 @@ class LSTMModel(nn.Module):
         hidden_dim: int = 64,
         num_layers: int = 2,
         dropout: float = 0.10,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
+        self.layer_norm = bool(layer_norm)
 
-        self.lstm = nn.LSTM(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
+        if self.layer_norm:
+            self.lstm = LayerNormLSTM(
+                input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout,
+            )
+        else:
+            self.lstm = nn.LSTM(
+                input_size=input_dim,
+                hidden_size=hidden_dim,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+            )
 
         self.head = nn.Sequential(
             nn.LayerNorm(hidden_dim),
