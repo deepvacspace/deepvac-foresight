@@ -3,13 +3,11 @@ from __future__ import annotations
 import math
 import sys
 import types
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, Sequence, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
-
 from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401
 
 
@@ -55,36 +53,7 @@ def _ensure_sklearn_stub() -> None:
 
 DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "gru_t1.pt"
 
-
-class GRUModel(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 64,
-        num_layers: int = 2,
-        dropout: float = 0.10,
-    ) -> None:
-        super().__init__()
-
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-
-        self.head = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, _ = self.gru(x)
-        return self.head(out[:, -1, :])
+from gru.model import GRUModel  # noqa: E402,F401  (re-exported for callers; single implementation)
 
 
 def limit(low: float, x: float, high: float) -> float:
@@ -114,7 +83,7 @@ class PidCoefSelector:
 
     def __init__(
         self,
-        points: Sequence[Tuple[float, float, float]],
+        points: Sequence[tuple[float, float, float]],
         min_range: float,
         max_range: float,
     ) -> None:
@@ -127,7 +96,7 @@ class PidCoefSelector:
         if self.range_width == 0.0:
             raise ValueError("PidCoefSelector max_range must differ from min_range.")
 
-    def get_coefs(self, x: float) -> Tuple[float, float, float, int]:
+    def get_coefs(self, x: float) -> tuple[float, float, float, int]:
         raw_index = math.trunc((float(x) - self.min_range) / self.range_width)
         interval_index = int(limit(0, raw_index, self.points_count))
         interval_index = min(interval_index, self.points_count - 1)
@@ -159,7 +128,7 @@ class ChamberPID:
         i_coef: float,
         d_coef: float,
         diff_out: float,
-    ) -> Tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float]:
         if not enable:
             self.p_part = 0.0
             self.i_part = 0.0
@@ -199,7 +168,7 @@ class ChamberPID:
 def load_model(
     checkpoint_path: Path,
     device: torch.device,
-) -> Tuple[GRUModel, Dict[str, object]]:
+) -> tuple[GRUModel, dict[str, object]]:
     _ensure_sklearn_stub()
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -208,6 +177,7 @@ def load_model(
         hidden_dim=int(checkpoint["hidden_dim"]),
         num_layers=int(checkpoint["num_layers"]),
         dropout=float(checkpoint["dropout"]),
+        layer_norm=bool(checkpoint.get("layer_norm", False)),
     ).to(device)
 
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -218,7 +188,7 @@ def load_model(
 
 def predict_delta_t1(
     model: GRUModel,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_window: np.ndarray,
     device: torch.device,
 ) -> float:
