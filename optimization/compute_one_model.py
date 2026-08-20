@@ -31,13 +31,13 @@ FEATURE_COLS = [
     "mid_kp", "mid_ki", "mid_kd",
     "near_kp", "near_ki", "near_kd",
 ]
-OUTPUT_DIR = Path(__file__).with_name("output")
+OUTPUT_DIR = ROOT / "experiments" / "output"
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
 
-    ap.add_argument("--history-roots", nargs="+", default=["run_history"])
+    ap.add_argument("--history-roots", nargs="+", default=[str(ROOT / "experiments" / "run_history")])
     ap.add_argument("--max-legacy-runs", type=int, default=3)
 
     ap.add_argument("--kp-bounds", default="6,50")

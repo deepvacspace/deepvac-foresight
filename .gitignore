@@ -56,16 +56,6 @@ credentials.json
 /overview.md
 
 
-/optimization/average_run/
-/optimization/run_history/
-/optimization/heatup_run_history/
-/optimization/temp_sweep_history/
-/optimization/best_old/
-/optimization/best_one_band/
-/optimization/best_three_band/
-/optimization/worst_run/
-/optimization/heatup_run_history/
-/optimization/temp_sweep_runs/
 /gru/gru_ranked_pid_runs/
 /gru/mlruns/
 /gru/mpc_pid_runs/
@@ -94,4 +84,6 @@ credentials.json
 /lstm/plots/
 
 /packaging
-/temp_sweep_history
+
+/experiments/
+/benchmarks/*/

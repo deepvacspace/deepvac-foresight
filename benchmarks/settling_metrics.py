@@ -17,7 +17,7 @@ Nothing is filtered out: episodes that never reach the target keep their row wit
 null settling metrics, and configurations that overshoot are ranked among
 themselves rather than dropped.
 
-    python -m optimization.settling_metrics --history-root optimization\\run_history
+    python -m benchmarks.settling_metrics --history-root experiments\\run_history
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Split each run into setpoint episodes and score overshoot, jitter, bias and settling separately.",
     )
-    ap.add_argument("--history-root", default="run_history")
+    ap.add_argument("--history-root", default=str(ROOT / "experiments" / "run_history"))
     ap.add_argument("--telemetry-names", nargs="+", default=["run_samples.csv"])
     ap.add_argument("--run-glob", default=None, help="Only include run directories matching this glob.")
 

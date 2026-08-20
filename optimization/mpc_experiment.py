@@ -33,7 +33,7 @@ PIDTriplet = Tuple[int, int, int]
 
 def build_arg_parser() -> argparse.ArgumentParser:
 	default_decisions = ROOT / "gru" / "mpc_pid_runs" / "mpc_20260603_162052_acd5dfb1" / "mpc_decisions.csv"
-	output_dir = Path(__file__).with_name("output")
+	output_dir = ROOT / "experiments" / "output"
 
 	ap = argparse.ArgumentParser(
 		description="Run a TCP experiment that replays PID updates from an MPC decisions CSV."
@@ -73,7 +73,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--read-retry-delay-s", type=float, default=0.25)
 	ap.add_argument("--max-consecutive-failures", type=int, default=10)
 
-	ap.add_argument("--history-root", default="run_history")
+	ap.add_argument("--history-root", default=str(ROOT / "experiments" / "run_history"))
 	ap.add_argument("--samples-csv", default="run_samples.csv")
 	ap.add_argument("--runs-csv", default="run_summary.csv")
 	ap.add_argument("--events-csv", default="pid_events.csv")

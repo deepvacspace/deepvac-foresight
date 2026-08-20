@@ -39,7 +39,7 @@ PIDTriplet = Tuple[int, int, int]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    output_dir = Path(__file__).with_name("output")
+    output_dir = ROOT / "experiments" / "output"
     # run_band_test() below hardcodes the far/mid/near crossings, so pin the BO to 3 bands.
     ap = band_bo.build_arg_parser(band_mode=3)
     ap.description = "Closed-loop runner using band_gp_bo three-model scheduling."
