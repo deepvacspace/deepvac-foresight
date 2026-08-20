@@ -1,0 +1,12 @@
+{
+  "best_value": 0.8622177304734566,
+  "best_params": {
+    "hidden_dim": 192,
+    "num_layers": 2,
+    "dropout": 0.15042254104909727,
+    "batch_size": 256,
+    "lr": 0.003196775720435588,
+    "weight_decay": 0.0009138225525107543,
+    "huber_beta": 0.818684687814905
+  }
+}

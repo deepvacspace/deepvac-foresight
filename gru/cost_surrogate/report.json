@@ -1,0 +1,16 @@
+{
+  "checkpoint": "C:\\Users\\mike_\\Desktop\\foresight\\gru\\cost_surrogate\\cost_surrogate.pt",
+  "gru_checkpoint": "C:\\Users\\mike_\\Desktop\\foresight\\gru\\validation_rollout\\gru_rollout.pt",
+  "target_normalization": "zscore",
+  "candidate_sampling": "mixed",
+  "optuna_trials": 20,
+  "n_rows": 534000,
+  "n_states": 500,
+  "mean_rank_correlation": 0.8622177304734566,
+  "n_states_evaluated": 75,
+  "screening_hit_rate": {
+    "top_0.1": 0.72,
+    "top_0.25": 0.8133333333333334,
+    "top_0.5": 0.92
+  }
+}
