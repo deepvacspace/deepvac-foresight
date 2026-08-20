@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 """Train the GRU plant model on multi-step rollouts instead of single steps.
 
-The loss is computed over an N-step unrolled rollout with gradients flowing through
-the unroll, feeding the temperature back from the model's own prediction and
-simulating the PID/diff controller in-graph as deepvac.mpc.step_state does at
-inference. Early stopping and checkpointing select on free-running rollout MAE over
-held-out runs. --split-by pid-config assigns whole clusters of near-duplicate PID
-configurations to one split.
+Loss is computed over an N-step unrolled rollout, feeding the predicted temperature
+back in and simulating the PID/diff controller in-graph. Early stopping and
+checkpointing select on free-running rollout MAE over held-out runs.
 
-The checkpoint layout matches gru/train_gru.py, so the result is a drop-in
-replacement in mpc_gru.py, mpc_batch.py, and simulate_gru.py.
-
---watch turns this into a long-running companion to whatever is collecting chamber
-runs (tocero_3band.py, band_bo_gp.py, ...): it polls --history-root, and once enough
-runs are new it retrains -- warm-started from the last checkpoint it promoted -- and
-promotes the result only if it beats that checkpoint on a validation split that is
-locked the first time it is computed and reused on every later pass, so "improved"
-means the same thing across the whole run. Checkpoint writes are atomic, so whatever
-is reading --promoted-checkpoint (twin_acceptance.py, MPC, a control app) never sees
-a half-written file.
+--watch polls --history-root and retrains, warm-started from the last promoted
+checkpoint, whenever enough new runs appear.
 
 Examples:
 
@@ -51,8 +39,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-
-# Bound before gru_common can install its sklearn stub, which torch's tracer rejects.
 import sklearn.preprocessing  # noqa: F401,E402
 import torch
 import torch.nn as nn
@@ -74,7 +60,6 @@ from gru.model import GRUModel  # noqa: E402
 WORK_DIR = ROOT / "optimization"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_rollout"
-# Shared with gru/train_gru.py's default MLflow tracking store.
 DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"
 
 # gru_common.CodesysDiff / ChamberPID constants.
@@ -90,10 +75,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     ap.add_argument("--history-root", nargs="+", default=[str(DEFAULT_HISTORY_ROOT)],
-                    help="One or more run-history roots; runs from all of them are pooled "
-                         "together. find_run_csvs() is one level deep, not recursive, so this "
-                         "is how to combine e.g. run_history/ and heatup_run_history/ -- "
-                         "pointing at their shared parent directory finds nothing.")
+                    help="One or more run-history roots; runs from all of them are pooled together.")
     ap.add_argument("--telemetry-names", nargs="+", default=["run_samples.csv"])
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--window-steps", type=int, default=60)
@@ -127,10 +109,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--config-cluster-eps",
         type=float,
         default=0.12,
-        help=(
-            "Single-linkage radius merging near-duplicate band tables, in a log-scaled "
-            "normalized gain space of diameter 3.0. 0 merges exact matches only."
-        ),
+        help="Single-linkage radius for merging near-duplicate band tables. 0 merges exact matches only.",
     )
     ap.add_argument("--train-fraction", type=float, default=0.80)
     ap.add_argument("--val-fraction", type=float, default=0.10)
@@ -193,8 +172,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--layer-norm",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Use a LayerNorm-GRU (normalizes each gate's pre-activation every step) "
-             "instead of plain nn.GRU. Trains slower step-for-step (no cuDNN fused kernel).",
+        help="Use a LayerNorm-GRU instead of plain nn.GRU.",
     )
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=40)
@@ -213,16 +191,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--optuna-trials",
         type=int,
         default=0,
-        help="Run this many Optuna trials over model/optimization hyperparameters "
-             "before the final training pass, selecting on val_rollout_mae. 0 disables "
-             "search and trains once with the CLI hyperparameters as given. Searches "
-             "--hidden-dim, --num-layers, --dropout, --layer-norm, --batch-size, --lr, "
-             "--weight-decay, --grad-clip, --huber-beta, --bias-weight, --tbptt-steps; "
-             "architecture stays fixed to --init-from's when that is set.",
+        help="Run this many Optuna trials over model/optimization hyperparameters before the "
+             "final training pass, selecting on val_rollout_mae. 0 disables search.",
     )
     ap.add_argument("--optuna-epochs", type=int, default=15,
-                    help="Max epochs per Optuna trial. Kept low by default since rollout "
-                         "epochs are expensive; the final pass still trains for --epochs.")
+                    help="Max epochs per Optuna trial; the final pass still trains for --epochs.")
     ap.add_argument("--optuna-timeout-s", type=float, default=None,
                     help="Stop starting new trials after this many seconds. Default: no timeout.")
     ap.add_argument(
@@ -254,12 +227,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--lock-split",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help=(
-            "Compute the val/test split once and reuse it on every later run so "
-            "'improved' is comparable across them. New runs since the lock become "
-            "training data; new runs that now cluster with a locked val/test run are "
-            "excluded rather than risking leakage. Default: on for --watch, off otherwise."
-        ),
+        help="Compute the val/test split once and reuse it on every later run. "
+             "Default: on for --watch, off otherwise.",
     )
     ap.add_argument("--split-lock-path", default=None,
                     help="Where the locked split is stored. Default: --output-dir/split_lock.json.")
@@ -389,10 +358,7 @@ def torch_pid_substeps(
     u_max: float,
     i_reverse_mul: float,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold").
-    Mirrors deepvac.mpc_batch._vec_pid_step's safe-division guards for kp == 0
-    and effective_i == 0.
-    """
+    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold")."""
     u = u_p = u_d = torch.zeros_like(temp)
     zero = torch.zeros_like(temp)
     one = torch.ones_like(temp)
@@ -404,7 +370,6 @@ def torch_pid_substeps(
         diff_out = DIFF_GAIN * torch.clamp(diff_filter, -DIFF_CLIP, DIFF_CLIP)
 
         delta = temp_ref - temp
-        # The scalar/numpy controllers return 0 and leave state untouched when kp == 0.
         kp_live = kp != 0.0
         safe_kp = torch.where(kp_live, kp, one)
         inv_kp = 1.0 / safe_kp
@@ -439,11 +404,7 @@ def torch_pid_substeps(
 def invert_diff_filter(
     u_d_norm: np.ndarray, kp: np.ndarray, kd: np.ndarray
 ) -> np.ndarray:
-    """Recover CodesysDiff's filter state from a logged D term.
-
-    Inverts u_d = (1/kp) * (kd * -DIFF_GAIN * clamp(diff_filter)). Approximate where
-    u_d sits on its +-D_PART_CLIP rail.
-    """
+    """Recover CodesysDiff's filter state from a logged D term."""
     kp = np.asarray(kp, dtype=np.float64)
     kd = np.asarray(kd, dtype=np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -506,12 +467,7 @@ def unroll(
     feature_index: dict[str, int],
     horizon: int,
 ) -> torch.Tensor:
-    """Free-running rollout. Returns predicted temperatures, shape (B, horizon).
-
-    Follows deepvac.mpc.step_state: the last window row is rewritten from the
-    current temperature and the controller terms, the model predicts a delta, then
-    the window rolls and a row built from the new temperature is appended.
-    """
+    """Free-running rollout. Returns predicted temperatures, shape (B, horizon)."""
     window = batch["window"]              # (B, W, F) raw
     temp = batch["temp0"]                 # (B,)
     i_part = batch["i_part0"]
@@ -624,11 +580,7 @@ def read_band_table(run_dir: Path) -> list[float] | None:
 
 
 def cluster_config_vectors(vectors: list[list[float]], eps: float) -> list[int]:
-    """Single-linkage cluster label per band table, within radius eps.
-
-    Gains are compared in log10 space and range-normalized per dimension, giving a
-    space of diameter sqrt(9) = 3.0.
-    """
+    """Single-linkage cluster label per band table, within radius eps."""
     arr = np.log10(np.maximum(np.asarray(vectors, dtype=np.float64), 1.0))
     low = arr.min(axis=0)
     arr = (arr - low) / np.maximum(arr.max(axis=0) - low, 1e-9)
@@ -760,15 +712,8 @@ def apply_split_lock(
     groups: dict[str, str],
     lock_path: Path,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Reuse a previously locked val/test split so improvement is comparable across
-    repeated runs, folding in any run collected since the lock as training data.
-
-    A newly collected run is excluded from training (not added to val/test either)
-    if its current PID-config cluster overlaps a locked val/test run: the group
-    clustering used here is a single-linkage over the whole dataset, so it can
-    reassign as new points arrive, and a run must not silently join training data
-    just because clustering happened to move it away from a held-out group.
-    """
+    """Reuse a previously locked val/test split, folding in any run collected
+    since the lock as training data."""
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     locked_val = [r for r in lock["val_runs"] if r in frames]
     locked_test = [r for r in lock["test_runs"] if r in frames]
@@ -921,9 +866,7 @@ def make_rollout_loader(
 
 
 def find_run_csvs_multi(history_roots: Sequence[str], telemetry_names: Sequence[str]) -> list[Path]:
-    """find_run_csvs over several roots, pooled. Each root is still scanned one
-    level deep, not recursively -- a run's CSV must sit directly under one of
-    these roots, e.g. run_history/<run_id>/run_samples.csv."""
+    """find_run_csvs over several roots, pooled."""
     csvs: list[Path] = []
     for root in history_roots:
         csvs.extend(find_run_csvs(Path(root), telemetry_names))
@@ -1084,10 +1027,7 @@ def make_scalers(
 
 
 def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
-    """Load runs, resolve the split, and build the rollout sample lists once.
-    Excludes anything depending on hyperparameters an Optuna search varies
-    (batch size, model architecture); those are applied in train_rollout_model().
-    """
+    """Load runs, resolve the split, and build the rollout sample lists once."""
     if args.rollout_steps < 1:
         raise ValueError("--rollout-steps must be >= 1")
     if args.rollout_stride < 1 or args.eval_stride < 1:
@@ -1226,10 +1166,8 @@ def train_rollout_model(
     trial=None,
     metric_prefix: str = "",
 ) -> dict[str, object]:
-    """Build loaders/model for one hyperparameter configuration and run the epoch
-    loop, selecting on rollout MAE. Used both for the final training pass and,
-    with `trial` set and `checkpoint_path`-saving skipped, for each Optuna trial.
-    """
+    """Build the model for one hyperparameter configuration and run the epoch
+    loop, selecting on rollout MAE."""
     device = data["device"]
     feature_index = data["feature_index"]
     scalers = data["scalers"]
@@ -1474,16 +1412,14 @@ def finalize_rollout_run(
 
 
 def suggest_tbptt_choices(rollout_steps: int) -> list[int]:
-    """--tbptt-steps candidates for an Optuna trial, scaled to --rollout-steps.
-    Full BPTT (0) is only offered at short horizons (<= 40 steps)."""
+    """--tbptt-steps candidates for an Optuna trial, scaled to the rollout horizon."""
     horizon = max(1, int(rollout_steps))
     truncated = sorted({max(1, horizon // 10), max(1, horizon // 4), max(1, horizon // 2)})
     return [0, *truncated] if horizon <= 40 else truncated
 
 
 def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namespace:
-    """Sample one trial's hyperparameters. Architecture (hidden_dim/num_layers/
-    dropout/layer_norm) is left untouched when --init-from is set."""
+    """Sample one trial's hyperparameters."""
     updates: dict[str, object] = {}
     if not base_args.init_from:
         updates["hidden_dim"] = trial.suggest_categorical("hidden_dim", [32, 64, 96, 128, 192, 256])

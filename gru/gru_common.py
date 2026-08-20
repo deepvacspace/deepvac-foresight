@@ -3,13 +3,11 @@ from __future__ import annotations
 import math
 import sys
 import types
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, Sequence, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
-
 from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401
 
 
@@ -172,7 +170,7 @@ class PidCoefSelector:
 
     def __init__(
         self,
-        points: Sequence[Tuple[float, float, float]],
+        points: Sequence[tuple[float, float, float]],
         min_range: float,
         max_range: float,
     ) -> None:
@@ -185,7 +183,7 @@ class PidCoefSelector:
         if self.range_width == 0.0:
             raise ValueError("PidCoefSelector max_range must differ from min_range.")
 
-    def get_coefs(self, x: float) -> Tuple[float, float, float, int]:
+    def get_coefs(self, x: float) -> tuple[float, float, float, int]:
         raw_index = math.trunc((float(x) - self.min_range) / self.range_width)
         interval_index = int(limit(0, raw_index, self.points_count))
         interval_index = min(interval_index, self.points_count - 1)
@@ -217,7 +215,7 @@ class ChamberPID:
         i_coef: float,
         d_coef: float,
         diff_out: float,
-    ) -> Tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float]:
         if not enable:
             self.p_part = 0.0
             self.i_part = 0.0
@@ -257,7 +255,7 @@ class ChamberPID:
 def load_model(
     checkpoint_path: Path,
     device: torch.device,
-) -> Tuple[GRUModel, Dict[str, object]]:
+) -> tuple[GRUModel, dict[str, object]]:
     _ensure_sklearn_stub()
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -277,7 +275,7 @@ def load_model(
 
 def predict_delta_t1(
     model: GRUModel,
-    checkpoint: Dict[str, object],
+    checkpoint: dict[str, object],
     feature_window: np.ndarray,
     device: torch.device,
 ) -> float:

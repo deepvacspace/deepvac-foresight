@@ -58,6 +58,8 @@ credentials.json
 
 /optimization/average_run/
 /optimization/run_history/
+/optimization/heatup_run_history/
+/optimization/temp_sweep_history/
 /optimization/best_old/
 /optimization/best_one_band/
 /optimization/best_three_band/
@@ -74,3 +76,4 @@ credentials.json
 /lstm/mlruns/
 
 /packaging
+/temp_sweep_history
