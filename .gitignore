@@ -43,6 +43,10 @@ credentials.json
 /plots
 /gru/diagnose_codesys.py
 /gru/diagnostics_t1/
+/gru/plots_t1/
+/gru/simulation_t1/
+/gru/validation_t1/
+/gru/validation/
 
 /.claude
 
@@ -60,6 +64,8 @@ credentials.json
 /optimization/best_one_band/
 /optimization/best_three_band/
 /optimization/worst_run/
+/optimization/heatup_run_history/
+/optimization/temp_sweep_runs/
 /gru/gru_ranked_pid_runs/
 /gru/mlruns/
 /gru/mpc_pid_runs/

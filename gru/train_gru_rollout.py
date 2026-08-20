@@ -82,7 +82,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--min-samples", type=int, default=100)
     ap.add_argument("--min-duration-s", type=float, default=300.0)
     ap.add_argument("--exclude-prefixes", nargs="*", default=[])
-    ap.add_argument("--max-runs", type=int, default=None, help="Cap runs loaded, for quick checks.")
+    ap.add_argument("--max-runs", type=int, default=None,
+                    help=(
+                        "Cap runs loaded, for quick checks. With --watch, folders beyond the cap "
+                        "still count as 'seen' once discovered, so they are never trained on "
+                        "later either -- leave this unset for real watch runs."
+                    ))
 
     # --- Splitting -------------------------------------------------------------
     ap.add_argument(
@@ -1213,7 +1218,7 @@ def train_rollout_model(
 
             loss = loss_fn(pred, target)
             if args.bias_weight > 0:
-                loss = loss + float(args.bias_weight) * torch.abs(torch.mean(pred - target))
+                loss = loss + float(args.bias_weight) * (pred - target).mean(dim=0).abs().mean()
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()

@@ -1,0 +1,22 @@
+{
+  "mode": "suggest",
+  "checkpoint": "C:\\Users\\mike_\\Desktop\\foresight\\gru\\validation_rollout\\gru_rollout.pt",
+  "start_temp": 24.0,
+  "target_temp": 0.0,
+  "duration_s": 1200.0,
+  "recommended_pid": {
+    "kp": 1.0,
+    "ki": 989.0,
+    "kd": 20.0
+  },
+  "n_candidates_evaluated": 768,
+  "valid": true,
+  "final_temp": -0.09371969931089552,
+  "overshoot": 0.24634903261903673,
+  "tail_mae": 0.10387732499108121,
+  "tail_std": 0.007272511274216758,
+  "time_to_near_s": 372.0,
+  "time_to_settle_s": 410.0,
+  "cost": 28.8242959665875,
+  "horizon_overshoot_max": 0.24634903261903673
+}
