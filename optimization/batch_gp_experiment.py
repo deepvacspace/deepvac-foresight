@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def build_arg_parser() -> argparse.ArgumentParser:
     default_batch_csv = ROOT / "gru" / "gru_ranked_pid_runs_batch" / "batch_gp_comparison.csv"
     default_script = ROOT / "optimization" / "gp_experiment.py"
-    default_output = ROOT / "optimization" / "output" / "batch_gp_decision_replay_runs.csv"
+    default_output = ROOT / "experiments" / "output" / "batch_gp_decision_replay_runs.csv"
 
     ap = argparse.ArgumentParser(
         description="Replay multiple generated GRU-ranked GP decision schedules over TCP."

@@ -3,7 +3,7 @@
 Two kinds of synthetic data are reused across unit and integration tests:
 
 - A `history_root` of synthetic run_samples.csv files (write_synthetic_run),
-  standing in for optimization/run_history/.
+  standing in for experiments/run_history/.
 - A tiny GRU checkpoint (tiny_gru_checkpoint) in the torch.save() shape
   gru/gru_common.py:load_model expects.
 """

@@ -68,7 +68,7 @@ LEGACY_METRIC_ALIASES: Dict[str, Dict[str, str]] = {
     ROLE_BRAKE: {"band_mae": "mid_mae"},
 }
 
-OUTPUT_DIR = Path(__file__).with_name("output")
+OUTPUT_DIR = Path(__file__).resolve().parents[1] / "experiments" / "output"
 COEF_COLS = ("kp", "ki", "kd")
 FEATURE_COLS = ("kp", "ki", "kd", "start_temp", "target_temp")
 REQUIRED_COLS = ("timestamp", "kp", "ki", "kd", "temp", "temp_ref")
@@ -248,7 +248,7 @@ def build_arg_parser(band_mode: Optional[int] = None) -> argparse.ArgumentParser
         help="3 = far/mid/near (tocero_3band), 5 = very_far/far/mid/near/very_near (tocero_5band).",
     )
 
-    ap.add_argument("--history-root", default="run_history",
+    ap.add_argument("--history-root", default=str(Path(__file__).resolve().parents[1] / "experiments" / "run_history"),
                     help="Root folder for runs.")
     ap.add_argument(
         "--telemetry-names",

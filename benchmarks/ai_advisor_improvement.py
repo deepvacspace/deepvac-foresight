@@ -19,6 +19,7 @@ REQUIRED_SAMPLE_COLS = {"timestamp", "temp", "temp_ref"}
 
 def build_arg_parser() -> argparse.ArgumentParser:
     root = Path(__file__).parent
+    experiments_root = Path(__file__).resolve().parents[1] / "experiments"
     out_dir = root / "output" / "ai_advisor_improvement"
 
     ap = argparse.ArgumentParser(
@@ -29,7 +30,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--history-root",
-        default=str(root / "run_history"),
+        default=str(experiments_root / "run_history"),
         help="Folder containing run subfolders with run_samples.csv.",
     )
     ap.add_argument("--out-dir", default=str(out_dir), help="Output folder.")

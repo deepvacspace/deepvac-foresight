@@ -51,17 +51,17 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "optimize-tocero-5band": ("optimization.tocero_5band", "Automated multi-run TCP tests, 5-band PID schedule."),
     "optimize-tocero-gp-mpc": ("optimization.tocero_gp_mpc", "Live run: GP far-band PID, then GRU+MPC replanning inside the band."),
     "collect-runs": ("optimization.collect_runs", "Repeated, start-gated runs driven by a time-indexed PID profile (logs the reheat)."),
-    "settling-metrics": ("optimization.settling_metrics", "Score overshoot, jitter, bias and settling per setpoint episode."),
     "replay-gp": ("optimization.gp_experiment", "Replay one GRU-ranked GP decision schedule over TCP."),
     "replay-gp-batch": ("optimization.batch_gp_experiment", "Replay multiple GRU-ranked GP decision schedules."),
     "replay-mpc": ("optimization.mpc_experiment", "Replay MPC PID decisions over TCP."),
-    "compare-advisor-improvement": ("optimization.ai_advisor_improvement", "Compare a baseline vs AI-advisor run."),
 
-    # --- Analysis and reporting (optimization/) -----------------------------
-    "list-runs": ("optimization.list_runs", "List/summarize run history, including NaN counts."),
-    "rank-runs": ("optimization.rank_runs", "Rank runs by tail MAE / time-to-zero / cost / overshoot."),
-    "plot-metrics": ("optimization.plot_metrics", "Plot run-history metrics."),
-    "plot-best": ("optimization.plot_best", "Plot trajectories for best/worst/average run groups."),
+    # --- Analysis, ranking, and plotting (benchmarks/) -----------------------
+    "settling-metrics": ("benchmarks.settling_metrics", "Score overshoot, jitter, bias and settling per setpoint episode."),
+    "compare-advisor-improvement": ("benchmarks.ai_advisor_improvement", "Compare a baseline vs AI-advisor run."),
+    "list-runs": ("benchmarks.list_runs", "List/summarize run history, including NaN counts."),
+    "rank-runs": ("benchmarks.rank_runs", "Rank runs by tail MAE / time-to-zero / cost / overshoot."),
+    "plot-metrics": ("benchmarks.plot_metrics", "Plot run-history metrics."),
+    "plot-best": ("benchmarks.plot_best", "Plot trajectories for best/worst/average run groups."),
 
     # --- Packaging (deepvac/) -----------------------------------------------
     "package-model": ("deepvac.package_model", "Package a checkpoint for the insight/control2-client desktop apps."),

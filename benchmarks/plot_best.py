@@ -17,15 +17,16 @@ METRIC_COLS = ("tail_mae", "tail_std", "overshoot", "cost")
 
 def build_arg_parser() -> argparse.ArgumentParser:
     root = Path(__file__).parent
+    experiments_root = Path(__file__).resolve().parents[1] / "experiments"
     out_dir = root / "plots"
     summary_dir = root / "summary"
     ap = argparse.ArgumentParser(
         description="Plot trajectories for best, worst, and average run groups."
     )
-    ap.add_argument("--best-one-root", default=str(root / "best_one_band"))
-    ap.add_argument("--best-three-root", default=str(root / "best_three_band"))
-    ap.add_argument("--worst-root", default=str(root / "worst_run"))
-    ap.add_argument("--average-root", default=str(root / "average_run"))
+    ap.add_argument("--best-one-root", default=str(experiments_root / "best_one_band"))
+    ap.add_argument("--best-three-root", default=str(experiments_root / "best_three_band"))
+    ap.add_argument("--worst-root", default=str(experiments_root / "worst_run"))
+    ap.add_argument("--average-root", default=str(experiments_root / "average_run"))
     ap.add_argument("--out-plot", default=str(out_dir /
                     "best_run_trajectories.png"))
     ap.add_argument("--out-summary",

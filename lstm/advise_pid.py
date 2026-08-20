@@ -12,7 +12,7 @@ LSTM plant model as a simulator, with CEM/random-shooting search over it.
 Point --checkpoint at a rollout-trained checkpoint (lstm/train_lstm_rollout.py's
 output), not the plain one-step lstm_t1.pt.
 
-Defaults to the ~24 -> 0 problem (optimization/run_history's baseline); override
+Defaults to the ~24 -> 0 problem (experiments/run_history's baseline); override
 --start-temp/--target-temp for anything else the twin has data for.
 
 Examples:

@@ -57,7 +57,7 @@ from deepvac.datasets import (  # noqa: E402
 
 from gru.model import GRUModel  # noqa: E402
 
-WORK_DIR = ROOT / "optimization"
+WORK_DIR = ROOT / "experiments"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_rollout"
 DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"

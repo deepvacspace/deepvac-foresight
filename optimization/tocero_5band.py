@@ -38,7 +38,7 @@ PID_SCHEDULES = [
 ]
 
 def build_arg_parser() -> argparse.ArgumentParser:
-	output_dir = Path(__file__).with_name("output")
+	output_dir = ROOT / "experiments" / "output"
 	ap = argparse.ArgumentParser()
 
 	ap.add_argument("--num-tests", type=int, default=15)
@@ -130,7 +130,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--max-consecutive-failures", type=int, default=10)
 
 	# Separate from the 3-band history: these summaries carry 15 PID columns.
-	ap.add_argument("--history-root", default="history_5_bands")
+	ap.add_argument("--history-root", default=str(ROOT / "experiments" / "history_5_bands"))
 	ap.add_argument("--samples-csv", default="run_samples.csv")
 	ap.add_argument("--runs-csv", default="run_summary.csv")
 	ap.add_argument("--all-runs-csv", default=str(output_dir / "bo_all_runs_5band.csv"))

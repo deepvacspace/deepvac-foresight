@@ -42,7 +42,7 @@ from deepvac.datasets import (  # noqa: E402
 from lstm.model import LSTMModel, SequenceDataset  # noqa: E402
 
 
-WORK_DIR = ROOT / "optimization"
+WORK_DIR = ROOT / "experiments"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_t1"
 DEFAULT_PLOTS_DIR = Path(__file__).resolve().parent / "plots_t1"

@@ -24,7 +24,7 @@ gru/twin_acceptance.py's module docstring for the measurement).
 Example, warm-started from a real run:
 
     python -m gru.predict_run --kp 6 --ki 997 --kd 16 \
-        --context-csv optimization/run_history/run_1776723160_994c5aad/run_samples.csv
+        --context-csv experiments/run_history/run_1776723160_994c5aad/run_samples.csv
 """
 
 from __future__ import annotations

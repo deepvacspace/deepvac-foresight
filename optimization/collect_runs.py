@@ -16,7 +16,7 @@ column. The test start is gated on both temperature (--start-temp-tol) and drift
 rate (--start-rate-tol) so repeats share an initial condition, and --repeats runs
 of each configuration are interleaved rather than run back to back.
 
-Nothing is scored here. Run optimization/settling_metrics.py over --history-root
+Nothing is scored here. Run benchmarks/settling_metrics.py over --history-root
 afterwards.
 
 SAFETY: writes PID values and temp_ref jobs to a real chamber over TCP with no
@@ -54,7 +54,7 @@ from tcp.tcp_common import (  # noqa: E402
     write_pid_row,
 )
 
-OUTPUT_DIR = Path(__file__).with_name("output")
+OUTPUT_DIR = ROOT / "experiments" / "output"
 
 PHASE_HEATUP = "heatup"
 PHASE_SOAK = "soak"
@@ -711,7 +711,7 @@ def main() -> None:
         print(f"\n[plan] {completed} runs completed this session, {remaining} still pending")
         print(f"[plan] plan file : {plan_path}")
         print(f"[plan] telemetry : {args.history_root}")
-        print(f"[plan] next      : python -m optimization.settling_metrics "
+        print(f"[plan] next      : python -m benchmarks.settling_metrics "
               f"--history-root {args.history_root}")
 
 

@@ -60,7 +60,7 @@ from tcp.tcp_common import (  # noqa: E402
 from lstm.lstm_common import ChamberPID, CodesysDiff, load_model, predict_delta_t1  # noqa: E402
 
 DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "lstm_t1.pt"
-DEFAULT_HISTORY_ROOT = ROOT / "optimization" / "run_history"
+DEFAULT_HISTORY_ROOT = ROOT / "experiments" / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "twin_acceptance"
 
 DEFAULT_PID_SETS = "6,997,16;10,500,20;15,750,10;20,200,40;4,900,8;12,300,25"
