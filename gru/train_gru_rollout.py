@@ -1,29 +1,13 @@
 #!/usr/bin/env python3
 """Train the GRU plant model on multi-step rollouts instead of single steps.
 
-  1. TRAINING. The loss is computed over an N-step unrolled rollout, with
-     gradients flowing through the unroll. During the rollout the temperature is
-     fed back from the model's own prediction and the PID/diff controller is
-     simulated in-graph, as deepvac.mpc.step_state does at inference. Only the
-     exogenous signals (temp_ref, kp, ki, kd) are read from the log.
+Loss is computed over an N-step unrolled rollout, feeding the predicted temperature
+back in and simulating the PID/diff controller in-graph. Early stopping and
+checkpointing select on free-running rollout MAE over held-out runs.
 
-  2. MODEL SELECTION. Early stopping and checkpointing use free-running rollout
-     MAE over held-out runs at the MPC horizon, not 1-step loss. Both are
-     reported every epoch.
+--watch polls --history-root and retrains, warm-started from the last promoted
+checkpoint, whenever enough new runs appear.
 
-  3. SPLITTING. --split-by pid-config keeps every run sharing a PID configuration
-     in the same split, so no test configuration appears in training.
-
-The checkpoint layout matches gru/train_gru.py, so the result is a drop-in
-replacement in mpc_gru.py, mpc_batch.py, and simulate_gru.py.
-
-Example -- fine-tune an existing 1-step checkpoint with a 40-step rollout loss:
-
-<<<<<<< Updated upstream
-    python -m gru.train_gru_rollout \
-        --init-from gru/validation_t1/gru_t1.pt \
-        --rollout-steps 40 --epochs 40 --split-by pid-config
-=======
 Examples:
 
     # One-shot, fine-tuning an existing 1-step checkpoint with a 100-step rollout loss.
@@ -35,31 +19,29 @@ Examples:
     python -m gru.train_gru_rollout \
         --init-from gru/validation_t1/gru_t1.pt --rollout-steps 100 \
         --watch --watch-min-new-runs 5 --watch-interval-s 300
->>>>>>> Stashed changes
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import os
+import random
 import sys
 import time
+from collections import Counter
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-<<<<<<< Updated upstream
-from typing import Dict, List, Optional, Sequence, Tuple
-=======
 from typing import Any
->>>>>>> Stashed changes
 
 import numpy as np
 import pandas as pd
+import sklearn.preprocessing  # noqa: F401,E402
 import torch
 import torch.nn as nn
-
-# Binds the real package before gru_common can install its sklearn stub, whose
-# missing __spec__ makes torch's dynamo tracer raise on find_spec("sklearn").
-import sklearn.preprocessing  # noqa: F401,E402
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -72,13 +54,12 @@ from deepvac.datasets import (  # noqa: E402
     prepare_run_dataframe,
     set_seed,
 )
+
 from gru.model import GRUModel  # noqa: E402
 
 WORK_DIR = ROOT / "optimization"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_rollout"
-# Same directory gru/train_gru.py defaults to -- distinct --experiment-name values
-# keep the two model families apart within one shared MLflow tracking store.
 DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"
 
 # gru_common.CodesysDiff / ChamberPID constants.
@@ -87,16 +68,14 @@ DIFF_CLIP = 5.0
 DIFF_GAIN = 10.0
 D_PART_CLIP = 0.4
 
-# Features the rollout regenerates rather than reads from the log.
-ENDOGENOUS = ("temp", "error", "temp_u", "temp_u_p", "temp_u_i", "temp_u_d")
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Train a GRU plant model on multi-step rollouts, selected on rollout error.",
     )
 
-    ap.add_argument("--history-root", default=str(DEFAULT_HISTORY_ROOT))
+    ap.add_argument("--history-root", nargs="+", default=[str(DEFAULT_HISTORY_ROOT)],
+                    help="One or more run-history roots; runs from all of them are pooled together.")
     ap.add_argument("--telemetry-names", nargs="+", default=["run_samples.csv"])
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--window-steps", type=int, default=60)
@@ -110,20 +89,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--split-by",
         choices=["pid-config", "run"],
         default="pid-config",
-        help=(
-            "pid-config keeps runs sharing a PID configuration together so no test "
-            "configuration appears in training. run splits by run id."
-        ),
+        help="pid-config splits by PID configuration group. run splits by run id.",
     )
     ap.add_argument(
         "--config-key",
-        choices=["triplet-set", "first-triplet"],
-        default="triplet-set",
+        choices=["band-table", "triplet-set", "first-triplet"],
+        default="band-table",
         help=(
-            "What counts as one PID configuration. triplet-set = every triplet used "
-            "in the run. first-triplet = the far-band entry gains only, which is "
-            "coarser and therefore stricter."
+            "What counts as one PID configuration. band-table uses the configured "
+            "far/mid/near gain table; the others use the triplets seen in the samples."
         ),
+    )
+    ap.add_argument(
+        "--config-cluster-eps",
+        type=float,
+        default=0.12,
+        help="Single-linkage radius for merging near-duplicate band tables. 0 merges exact matches only.",
     )
     ap.add_argument("--train-fraction", type=float, default=0.80)
     ap.add_argument("--val-fraction", type=float, default=0.10)
@@ -173,7 +154,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--bias-weight",
         type=float,
         default=0.0,
-        help="Extra penalty on the mean signed rollout error.",
+        help="Extra penalty on the mean absolute per-step rollout bias.",
     )
 
     # --- Optimization ----------------------------------------------------------
@@ -186,13 +167,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--layer-norm",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help=(
-            "Use a LayerNorm-GRU (normalizes each gate's pre-activation every step) "
-            "instead of plain nn.GRU. Plain nn.GRU has no normalization inside the "
-            "recurrence, only in the head after the last step -- over a 100+-step "
-            "free-running rollout that's one of the things letting per-step drift "
-            "compound. Trains slower step-for-step (no cuDNN fused kernel)."
-        ),
+        help="Use a LayerNorm-GRU instead of plain nn.GRU.",
     )
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=40)
@@ -206,30 +181,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--checkpoint-name", default="gru_rollout.pt")
     ap.add_argument("--report-name", default="rollout_report.json")
 
-<<<<<<< Updated upstream
-    return ap
-
-
-=======
     # --- Optuna hyperparameter search --------------------------------------------
     ap.add_argument(
         "--optuna-trials",
         type=int,
         default=0,
-        help=(
-            "Run this many Optuna trials over model/optimization hyperparameters "
-            "before the final training pass, selecting on val_rollout_mae. 0 disables "
-            "search and trains once with the CLI hyperparameters as given. Each trial "
-            "reuses the rollout samples built once up front -- only --hidden-dim, "
-            "--num-layers, --dropout, --batch-size, --lr, --weight-decay, --grad-clip, "
-            "--huber-beta, --bias-weight, and --tbptt-steps are searched. Architecture "
-            "(--hidden-dim/--num-layers/--dropout) is left fixed at whatever --init-from "
-            "carries, since a warm start's architecture can't change."
-        ),
+        help="Run this many Optuna trials over model/optimization hyperparameters before the "
+             "final training pass, selecting on val_rollout_mae. 0 disables search.",
     )
     ap.add_argument("--optuna-epochs", type=int, default=15,
-                    help="Max epochs per Optuna trial. Kept low by default since rollout "
-                         "epochs are expensive; the final pass still trains for --epochs.")
+                    help="Max epochs per Optuna trial; the final pass still trains for --epochs.")
     ap.add_argument("--optuna-timeout-s", type=float, default=None,
                     help="Stop starting new trials after this many seconds. Default: no timeout.")
     ap.add_argument(
@@ -261,12 +222,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--lock-split",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help=(
-            "Compute the val/test split once and reuse it on every later run so "
-            "'improved' is comparable across them. New runs since the lock become "
-            "training data; new runs that now cluster with a locked val/test run are "
-            "excluded rather than risking leakage. Default: on for --watch, off otherwise."
-        ),
+        help="Compute the val/test split once and reuse it on every later run. "
+             "Default: on for --watch, off otherwise.",
     )
     ap.add_argument("--split-lock-path", default=None,
                     help="Where the locked split is stored. Default: --output-dir/split_lock.json.")
@@ -319,13 +276,8 @@ def atomic_copy(src: Path, dst: Path) -> None:
     os.replace(tmp, dst)
 
 
->>>>>>> Stashed changes
 # -----------------------------------------------------------------------------
 # MLflow experiment tracking / Optuna hyperparameter search
-#
-# Mirrors the pattern in gru/train_gru.py -- both dependencies are optional
-# (see pyproject.toml's [training] extra) and imported lazily so plain
-# single-run training keeps working with neither installed.
 # -----------------------------------------------------------------------------
 
 
@@ -400,36 +352,19 @@ def torch_pid_substeps(
     u_min: float,
     u_max: float,
     i_reverse_mul: float,
-<<<<<<< Updated upstream
-) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold").
-
-    Logged kp and ki are always >= 1, so the scalar version's p_coef == 0 and
-    effective_i == 0 guards are omitted.
-=======
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold").
-
-    Mirrors deepvac.mpc_batch._vec_pid_step's safe-division guards: kp == 0 and
-    effective_i == 0 both occur in real band tables, and dividing by them directly
-    -- even inside a torch.where branch that forward-pass masks away -- still
-    differentiates the discarded 0/0 branch and poisons every gradient with nan.
->>>>>>> Stashed changes
-    """
+    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold")."""
     u = u_p = u_d = torch.zeros_like(temp)
     zero = torch.zeros_like(temp)
     one = torch.ones_like(temp)
 
     for _ in range(n_substeps):
-        # temp is held constant across substeps, so the filter decays after the
-        # first pass.
         filter_in = torch.clamp(temp - diff_prev, -DIFF_CLIP, DIFF_CLIP)
         diff_filter = DIFF_DC * diff_filter + (1.0 - DIFF_DC) * filter_in
         diff_prev = temp
         diff_out = DIFF_GAIN * torch.clamp(diff_filter, -DIFF_CLIP, DIFF_CLIP)
 
         delta = temp_ref - temp
-        # The scalar/numpy controllers return 0 and leave state untouched when kp == 0.
         kp_live = kp != 0.0
         safe_kp = torch.where(kp_live, kp, one)
         inv_kp = 1.0 / safe_kp
@@ -448,15 +383,9 @@ def torch_pid_substeps(
         i_part = torch.clamp(i_part, u_min, u_max)
         u_d = torch.clamp(u_d, -D_PART_CLIP, D_PART_CLIP)
 
-<<<<<<< Updated upstream
-        # u sums the unclipped p_part with the clipped i/d parts, then clips.
-        u = torch.clamp(u_p + i_part + u_d, u_min, u_max)
-        u_p = torch.clamp(u_p, u_min, u_max)
-=======
         u = torch.where(kp_live, torch.clamp(u_p + i_part + u_d, u_min, u_max), zero)
         u_p = torch.where(kp_live, torch.clamp(u_p, u_min, u_max), zero)
         u_d = torch.where(kp_live, u_d, zero)
->>>>>>> Stashed changes
 
     terms = {
         "temp_u": u * feature_scale,
@@ -467,15 +396,27 @@ def torch_pid_substeps(
     return terms, i_part, diff_prev, diff_filter
 
 
+def invert_diff_filter(
+    u_d_norm: np.ndarray, kp: np.ndarray, kd: np.ndarray
+) -> np.ndarray:
+    """Recover CodesysDiff's filter state from a logged D term."""
+    kp = np.asarray(kp, dtype=np.float64)
+    kd = np.asarray(kd, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        diff_filter = -np.asarray(u_d_norm, dtype=np.float64) * kp / (DIFF_GAIN * kd)
+    diff_filter = np.where(np.isfinite(diff_filter), diff_filter, 0.0)
+    return np.clip(diff_filter, -DIFF_CLIP, DIFF_CLIP).astype(np.float32)
+
+
 def assemble_feature_row(
-    feature_index: Dict[str, int],
+    feature_index: dict[str, int],
     *,
     temp: torch.Tensor,
     temp_ref: torch.Tensor,
     kp: torch.Tensor,
     ki: torch.Tensor,
     kd: torch.Tensor,
-    terms: Dict[str, torch.Tensor],
+    terms: dict[str, torch.Tensor],
 ) -> torch.Tensor:
     """Build one raw feature row per batch element, ordered like FEATURE_NAMES."""
     values = {
@@ -515,31 +456,33 @@ class Scalers:
 
 def unroll(
     model: nn.Module,
-    batch: Dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
     scalers: Scalers,
     args: argparse.Namespace,
-    feature_index: Dict[str, int],
+    feature_index: dict[str, int],
     horizon: int,
 ) -> torch.Tensor:
-    """Free-running rollout. Returns predicted temperatures, shape (B, horizon).
-
-    Follows deepvac.mpc.step_state: the last window row is rewritten from the
-    current temperature and the controller terms, the model predicts a delta, then
-    the window rolls and a row built from the new temperature is appended.
-    """
+    """Free-running rollout. Returns predicted temperatures, shape (B, horizon)."""
     window = batch["window"]              # (B, W, F) raw
     temp = batch["temp0"]                 # (B,)
     i_part = batch["i_part0"]
     diff_prev = batch["diff_prev0"]
     diff_filter = batch["diff_filter0"]
     exog = batch["exog"]                  # (B, H, 4): temp_ref, kp, ki, kd
-    logged_terms = batch.get("logged_terms")  # (B, H, 4), --control-mode teacher
+    logged_terms = batch.get("logged_terms")  # (B, H, 4)
 
-    n_substeps = max(1, int(round(float(batch["dt_s"][0].item()) / max(float(args.pid_period_s), 1e-6))))
+    substeps = batch["n_substeps"]
+    n_substeps = int(substeps[0].item())
+    if bool(torch.any(substeps != substeps[0])):
+        raise ValueError(
+            "A batch mixed rollouts with different PID substep counts "
+            f"({sorted(set(int(v) for v in substeps.tolist()))}); "
+            "SubstepBatchSampler should have kept them apart."
+        )
     feature_scale = max(abs(float(args.control_feature_scale)), 1e-9)
     tbptt = int(args.tbptt_steps)
 
-    preds: List[torch.Tensor] = []
+    preds: list[torch.Tensor] = []
 
     for step in range(horizon):
         temp_ref = exog[:, step, 0]
@@ -590,6 +533,105 @@ def unroll(
 # -----------------------------------------------------------------------------
 
 
+BAND_COLUMNS = [
+    f"{band}_{coef}"
+    for band in ("far", "mid", "near")
+    for coef in ("kp", "ki", "kd")
+]
+
+
+def read_band_table(run_dir: Path) -> list[float] | None:
+    """The far/mid/near gain table a run was configured with, read from
+    run_summary.csv or band_metrics.json. None if the run used no static table."""
+    summary_path = run_dir / "run_summary.csv"
+    if summary_path.exists():
+        try:
+            summary = pd.read_csv(summary_path, nrows=1)
+        except Exception:
+            summary = pd.DataFrame()
+        if not summary.empty and all(col in summary.columns for col in BAND_COLUMNS):
+            values = pd.to_numeric(summary.iloc[0][BAND_COLUMNS], errors="coerce")
+            if values.notna().all():
+                return [float(v) for v in values]
+
+    metrics_path = run_dir / "band_metrics.json"
+    if metrics_path.exists():
+        try:
+            records = json.loads(metrics_path.read_text(encoding="utf-8")).get("records", [])
+        except (json.JSONDecodeError, OSError):
+            records = []
+        by_band = {str(rec.get("band")): rec for rec in records}
+        if {"far", "mid", "near"} <= set(by_band):
+            try:
+                return [
+                    float(by_band[band][coef])
+                    for band in ("far", "mid", "near")
+                    for coef in ("kp", "ki", "kd")
+                ]
+            except (KeyError, TypeError, ValueError):
+                pass
+
+    return None
+
+
+def cluster_config_vectors(vectors: list[list[float]], eps: float) -> list[int]:
+    """Single-linkage cluster label per band table, within radius eps."""
+    arr = np.log10(np.maximum(np.asarray(vectors, dtype=np.float64), 1.0))
+    low = arr.min(axis=0)
+    arr = (arr - low) / np.maximum(arr.max(axis=0) - low, 1e-9)
+
+    n = len(arr)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(n):
+        distance = np.sqrt(np.sum((arr - arr[i]) ** 2, axis=1))
+        for j in np.nonzero(distance <= max(float(eps), 0.0))[0]:
+            root_i, root_j = find(i), find(int(j))
+            if root_i != root_j:
+                parent[root_i] = root_j
+
+    return [find(i) for i in range(n)]
+
+
+def build_config_groups(
+    frames: dict[str, pd.DataFrame],
+    run_dirs: dict[str, Path],
+    args: argparse.Namespace,
+) -> tuple[dict[str, str], dict[str, object]]:
+    """Map every run to the identity of the PID configuration it used."""
+    key = getattr(args, "config_key", "band-table")
+    if key != "band-table":
+        groups = {run_id: pid_config_signature(df, key) for run_id, df in frames.items()}
+        return groups, {"config_key": key}
+
+    tables = {run_id: read_band_table(run_dirs[run_id]) for run_id in frames}
+    with_table = [run_id for run_id in sorted(frames) if tables[run_id] is not None]
+    without_table = [run_id for run_id in sorted(frames) if tables[run_id] is None]
+
+    groups: dict[str, str] = {}
+    if with_table:
+        labels = cluster_config_vectors(
+            [tables[run_id] for run_id in with_table], float(args.config_cluster_eps)
+        )
+        for run_id, label in zip(with_table, labels, strict=True):
+            groups[run_id] = f"band-cluster-{int(label)}"
+    for run_id in without_table:
+        groups[run_id] = f"no-band-table-{run_id}"
+
+    return groups, {
+        "config_key": key,
+        "cluster_eps": float(args.config_cluster_eps),
+        "n_with_band_table": len(with_table),
+        "n_without_band_table": len(without_table),
+    }
+
+
 def pid_config_signature(df: pd.DataFrame, key: str = "triplet-set") -> str:
     """Identity of the PID configuration a run used, derived from its samples.
 
@@ -609,13 +651,13 @@ def pid_config_signature(df: pd.DataFrame, key: str = "triplet-set") -> str:
 
 
 def split_by_group(
-    run_to_group: Dict[str, str],
+    run_to_group: dict[str, str],
     train_fraction: float,
     val_fraction: float,
     seed: int,
-) -> Tuple[List[str], List[str], List[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     """Assign whole groups to splits, greedily hitting the target run fractions."""
-    groups: Dict[str, List[str]] = {}
+    groups: dict[str, list[str]] = {}
     for run_id, group in run_to_group.items():
         groups.setdefault(group, []).append(run_id)
 
@@ -628,7 +670,6 @@ def split_by_group(
 
     rng = np.random.default_rng(seed)
     rng.shuffle(keys)
-    # Largest groups first.
     keys.sort(key=lambda k: -len(groups[k]))
 
     total = sum(len(groups[k]) for k in keys)
@@ -637,11 +678,10 @@ def split_by_group(
         "val": val_fraction * total,
         "test": max(0.0, 1.0 - train_fraction - val_fraction) * total,
     }
-    buckets: Dict[str, List[str]] = {"train": [], "val": [], "test": []}
+    buckets: dict[str, list[str]] = {"train": [], "val": [], "test": []}
     counts = {"train": 0, "val": 0, "test": 0}
 
     for key in keys:
-        # Whichever split is furthest below its target, in relative terms.
         name = max(targets, key=lambda n: (targets[n] - counts[n]) / max(targets[n], 1e-9))
         buckets[name].extend(groups[key])
         counts[name] += len(groups[key])
@@ -652,13 +692,47 @@ def split_by_group(
     return sorted(buckets["train"]), sorted(buckets["val"]), sorted(buckets["test"])
 
 
+def write_split_lock(path: Path, val_runs: Sequence[str], test_runs: Sequence[str], n_runs: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "val_runs": list(val_runs),
+        "test_runs": list(test_runs),
+        "locked_at": datetime.now(timezone.utc).isoformat(),
+        "n_runs_when_locked": int(n_runs),
+    }, indent=2), encoding="utf-8")
+
+
+def apply_split_lock(
+    frames: dict[str, pd.DataFrame],
+    groups: dict[str, str],
+    lock_path: Path,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Reuse a previously locked val/test split, folding in any run collected
+    since the lock as training data."""
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    locked_val = [r for r in lock["val_runs"] if r in frames]
+    locked_test = [r for r in lock["test_runs"] if r in frames]
+    missing = [r for r in (*lock["val_runs"], *lock["test_runs"]) if r not in frames]
+    if missing:
+        print(f"[split] WARNING {len(missing)} locked val/test run(s) are no longer under "
+              f"--history-root: {missing[:5]}{' ...' if len(missing) > 5 else ''}")
+
+    locked_ids = set(locked_val) | set(locked_test)
+    locked_groups = {groups[r] for r in locked_ids}
+
+    train_runs = sorted(r for r in frames if r not in locked_ids and groups[r] not in locked_groups)
+    excluded = sorted(r for r in frames if r not in locked_ids and groups[r] in locked_groups)
+
+    return train_runs, sorted(locked_val), sorted(locked_test), excluded
+
+
 def build_rollout_samples(
     df: pd.DataFrame,
     run_id: str,
     args: argparse.Namespace,
     horizon: int,
     stride: int,
-) -> List[Dict[str, np.ndarray]]:
+) -> list[dict[str, np.ndarray]]:
     """Rollout start points for one run."""
     features = df[FEATURE_NAMES].to_numpy(dtype=np.float32)
     temp = df["temp"].to_numpy(dtype=np.float32)
@@ -673,7 +747,15 @@ def build_rollout_samples(
         dt_s = 1.0
 
     feature_scale = max(abs(float(args.control_feature_scale)), 1e-9)
-    samples: List[Dict[str, np.ndarray]] = []
+    n_substeps = max(1, int(round(dt_s / max(float(args.pid_period_s), 1e-6))))
+
+    # Controller state left behind by each row, which the next row's step starts from.
+    i_part_state = term_cols[:, 2] / feature_scale
+    diff_filter_state = invert_diff_filter(
+        term_cols[:, 3] / feature_scale, exog_cols[:, 1], exog_cols[:, 3]
+    )
+
+    samples: list[dict[str, np.ndarray]] = []
 
     last_start = len(df) - horizon - 1
     for end_idx in range(window_steps - 1, last_start + 1, max(1, stride)):
@@ -688,17 +770,17 @@ def build_rollout_samples(
         if not (np.isfinite(window).all() and np.isfinite(target).all() and np.isfinite(exog).all()):
             continue
 
+        prev_idx = max(end_idx - 1, 0)
         samples.append({
             "window": window.astype(np.float32),
             "temp0": np.float32(temp[end_idx]),
-            # Controller seeded from the logged control state at the start point.
-            "i_part0": np.float32(term_cols[end_idx, 2] / feature_scale),
-            "diff_prev0": np.float32(temp[end_idx]),
-            "diff_filter0": np.float32(0.0),
+            "i_part0": np.float32(i_part_state[prev_idx]),
+            "diff_prev0": np.float32(temp[prev_idx]),
+            "diff_filter0": np.float32(diff_filter_state[prev_idx]),
             "exog": exog.astype(np.float32),
             "logged_terms": terms.astype(np.float32),
             "target": target.astype(np.float32),
-            "dt_s": np.float32(dt_s),
+            "n_substeps": np.int64(n_substeps),
             "run_id": run_id,
         })
 
@@ -706,13 +788,13 @@ def build_rollout_samples(
 
 
 class RolloutDataset(torch.utils.data.Dataset):
-    def __init__(self, samples: List[Dict[str, np.ndarray]]) -> None:
+    def __init__(self, samples: list[dict[str, np.ndarray]]) -> None:
         self.samples = samples
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         s = self.samples[idx]
         return {
             "window": torch.from_numpy(s["window"]),
@@ -723,20 +805,82 @@ class RolloutDataset(torch.utils.data.Dataset):
             "exog": torch.from_numpy(s["exog"]),
             "logged_terms": torch.from_numpy(s["logged_terms"]),
             "target": torch.from_numpy(s["target"]),
-            "dt_s": torch.tensor(s["dt_s"]),
+            "n_substeps": torch.tensor(s["n_substeps"]),
         }
 
 
-def load_runs(args: argparse.Namespace) -> Tuple[Dict[str, pd.DataFrame], Dict[str, str], List[Dict[str, object]]]:
-    csvs = find_run_csvs(Path(args.history_root), args.telemetry_names)
+class SubstepBatchSampler(torch.utils.data.Sampler):
+    """Yields batches whose rollouts all share one PID substep count."""
+
+    def __init__(
+        self,
+        samples: list[dict[str, np.ndarray]],
+        batch_size: int,
+        shuffle: bool = False,
+        seed: int = 0,
+    ) -> None:
+        self.buckets: dict[int, list[int]] = {}
+        for idx, sample in enumerate(samples):
+            self.buckets.setdefault(int(sample["n_substeps"]), []).append(idx)
+        self.batch_size = max(1, int(batch_size))
+        self.shuffle = bool(shuffle)
+        self.rng = random.Random(seed)
+
+    def __len__(self) -> int:
+        return sum(
+            (len(idxs) + self.batch_size - 1) // self.batch_size
+            for idxs in self.buckets.values()
+        )
+
+    def __iter__(self) -> Iterator[list[int]]:
+        batches: list[list[int]] = []
+        for idxs in self.buckets.values():
+            order = list(idxs)
+            if self.shuffle:
+                self.rng.shuffle(order)
+            batches.extend(
+                order[i : i + self.batch_size]
+                for i in range(0, len(order), self.batch_size)
+            )
+        if self.shuffle:
+            self.rng.shuffle(batches)
+        return iter(batches)
+
+
+def make_rollout_loader(
+    samples: list[dict[str, np.ndarray]],
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+) -> torch.utils.data.DataLoader:
+    """DataLoader that never mixes substep counts within a batch."""
+    return torch.utils.data.DataLoader(
+        RolloutDataset(samples),
+        batch_sampler=SubstepBatchSampler(samples, batch_size, shuffle=shuffle, seed=seed),
+    )
+
+
+def find_run_csvs_multi(history_roots: Sequence[str], telemetry_names: Sequence[str]) -> list[Path]:
+    """find_run_csvs over several roots, pooled."""
+    csvs: list[Path] = []
+    for root in history_roots:
+        csvs.extend(find_run_csvs(Path(root), telemetry_names))
+    return csvs
+
+
+def load_runs(
+    args: argparse.Namespace,
+) -> tuple[dict[str, pd.DataFrame], dict[str, str], dict[str, object], list[dict[str, object]]]:
+    history_roots = [args.history_root] if isinstance(args.history_root, str) else list(args.history_root)
+    csvs = find_run_csvs_multi(history_roots, args.telemetry_names)
     if args.exclude_prefixes:
         csvs = [p for p in csvs if not any(p.parent.name.startswith(x) for x in args.exclude_prefixes)]
     if args.max_runs is not None:
         csvs = csvs[: int(args.max_runs)]
 
-    frames: Dict[str, pd.DataFrame] = {}
-    groups: Dict[str, str] = {}
-    skipped: List[Dict[str, object]] = []
+    frames: dict[str, pd.DataFrame] = {}
+    run_dirs: dict[str, Path] = {}
+    skipped: list[dict[str, object]] = []
 
     for csv_path in csvs:
         try:
@@ -745,13 +889,19 @@ def load_runs(args: argparse.Namespace) -> Tuple[Dict[str, pd.DataFrame], Dict[s
             skipped.append({"run": csv_path.parent.name, "reason": str(exc)})
             continue
         run_id = str(meta["run_id"])
+        if run_id in frames:
+            skipped.append({"run": csv_path.parent.name,
+                            "reason": f"duplicate run_id {run_id!r} already loaded from another root"})
+            continue
         frames[run_id] = df
-        groups[run_id] = pid_config_signature(df, getattr(args, "config_key", "triplet-set"))
+        run_dirs[run_id] = csv_path.parent
 
     if len(frames) < 3:
-        raise RuntimeError(f"Only {len(frames)} usable runs under {args.history_root}")
+        raise RuntimeError(f"Only {len(frames)} usable runs under {history_roots}")
 
-    return frames, groups, skipped
+    groups, group_info = build_config_groups(frames, run_dirs, args)
+
+    return frames, groups, group_info, skipped
 
 
 # -----------------------------------------------------------------------------
@@ -764,12 +914,12 @@ def evaluate_rollout(
     loader: torch.utils.data.DataLoader,
     scalers: Scalers,
     args: argparse.Namespace,
-    feature_index: Dict[str, int],
+    feature_index: dict[str, int],
     horizon: int,
     device: torch.device,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     model.eval()
-    errors: List[np.ndarray] = []
+    errors: list[np.ndarray] = []
 
     with torch.no_grad():
         for batch in loader:
@@ -791,7 +941,6 @@ def evaluate_rollout(
         "bias_final_step": float(per_step_bias[-1]),
         "p90_abs_error_temp": float(np.percentile(np.abs(err), 90)),
         "max_abs_error_temp": float(np.max(np.abs(err))),
-        # Drift-vs-horizon curve.
         "per_step_mae": [float(v) for v in per_step_mae],
         "per_step_bias": [float(v) for v in per_step_bias],
     }
@@ -799,12 +948,12 @@ def evaluate_rollout(
 
 def evaluate_one_step(
     model: nn.Module,
-    frames: Dict[str, pd.DataFrame],
+    frames: dict[str, pd.DataFrame],
     run_ids: Sequence[str],
     scalers: Scalers,
     args: argparse.Namespace,
     device: torch.device,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """1-step teacher-forced metrics."""
     xs, ys = [], []
     for run_id in run_ids:
@@ -819,7 +968,7 @@ def evaluate_one_step(
     y = np.concatenate(ys, axis=0)[:, 0]
 
     model.eval()
-    preds: List[np.ndarray] = []
+    preds: list[np.ndarray] = []
     with torch.no_grad():
         for i in range(0, len(X), 512):
             xb = X[i : i + 512].to(device)
@@ -841,12 +990,12 @@ def evaluate_one_step(
 
 
 def make_scalers(
-    frames: Dict[str, pd.DataFrame],
+    frames: dict[str, pd.DataFrame],
     train_runs: Sequence[str],
     args: argparse.Namespace,
     device: torch.device,
-    init_checkpoint: Optional[Dict[str, object]],
-) -> Tuple[Scalers, object, object]:
+    init_checkpoint: dict[str, object] | None,
+) -> tuple[Scalers, object, object]:
     """Reuse the warm-start checkpoint's scalers if present, else fit on train runs."""
     from sklearn.preprocessing import StandardScaler
 
@@ -872,20 +1021,8 @@ def make_scalers(
     return scalers, x_scaler, y_scaler
 
 
-<<<<<<< Updated upstream
-def main() -> None:
-    args = build_arg_parser().parse_args()
-    set_seed(args.seed)
-=======
 def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
-    """Load runs, resolve the split, and build the rollout sample lists once.
->>>>>>> Stashed changes
-
-    Deliberately excludes anything that depends on the hyperparameters an Optuna
-    search varies (batch size, model architecture): those are applied later in
-    train_rollout_model() so a search reuses this -- expensive -- data build
-    across all its trials instead of repeating it per trial.
-    """
+    """Load runs, resolve the split, and build the rollout sample lists once."""
     if args.rollout_steps < 1:
         raise ValueError("--rollout-steps must be >= 1")
     if args.rollout_stride < 1 or args.eval_stride < 1:
@@ -903,22 +1040,51 @@ def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     feature_index = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
-    print(f"[data] loading runs from {args.history_root}")
-    frames, groups, skipped = load_runs(args)
+    print(f"[data] loading runs from {', '.join(args.history_root)}")
+    frames, groups, group_info, skipped = load_runs(args)
+    group_sizes = Counter(groups.values())
     print(f"[data] {len(frames)} usable runs, {len(skipped)} skipped, "
-          f"{len(set(groups.values()))} distinct PID configurations (--config-key {args.config_key})")
+          f"{len(group_sizes)} distinct PID configurations (--config-key {args.config_key})")
+    if args.config_key == "band-table":
+        largest = max(group_sizes.values())
+        print(f"[data] band tables read for {group_info['n_with_band_table']} runs, "
+              f"{group_info['n_without_band_table']} without (kept as their own group); "
+              f"clustered at eps={args.config_cluster_eps:g} into {len(group_sizes)} groups, "
+              f"{sum(1 for n in group_sizes.values() if n == 1)} singletons, "
+              f"largest {largest} runs ({100.0 * largest / len(frames):.0f}%)")
+        if largest > 0.5 * len(frames):
+            print("[data] WARNING one cluster holds over half the runs; --config-cluster-eps "
+                  "is high enough that single-linkage is chaining distinct configurations together.")
+
+    lock_split = bool(args.watch) if args.lock_split is None else bool(args.lock_split)
+    split_lock_path = Path(args.split_lock_path or (output_dir / "split_lock.json"))
+    excluded_by_lock: list[str] = []
 
     if args.split_by == "pid-config":
-        train_runs, val_runs, test_runs = split_by_group(
-            groups, args.train_fraction, args.val_fraction, args.seed
-        )
+        if lock_split and split_lock_path.exists():
+            train_runs, val_runs, test_runs, excluded_by_lock = apply_split_lock(
+                frames, groups, split_lock_path
+            )
+        else:
+            train_runs, val_runs, test_runs = split_by_group(
+                groups, args.train_fraction, args.val_fraction, args.seed
+            )
+            if lock_split:
+                write_split_lock(split_lock_path, val_runs, test_runs, n_runs=len(frames))
+                print(f"[split] locked val/test split -> {split_lock_path}")
     else:
         from deepvac.datasets import split_runs as split_by_run
         train_runs, val_runs, test_runs = split_by_run(
             sorted(frames), args.train_fraction, args.val_fraction, args.seed
         )
+        if lock_split:
+            print("[split] WARNING --lock-split has no effect with --split-by run")
 
-    # How many held-out configurations also appear in training.
+    if excluded_by_lock:
+        print(f"[split] {len(excluded_by_lock)} run(s) excluded this pass: their current PID-config "
+              f"cluster overlaps a locked val/test run -> {excluded_by_lock[:5]}"
+              f"{' ...' if len(excluded_by_lock) > 5 else ''}")
+
     train_cfgs = {groups[r] for r in train_runs}
     leak = {
         "test_configs": len({groups[r] for r in test_runs}),
@@ -939,8 +1105,6 @@ def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
 
         _ensure_sklearn_stub()
         init_checkpoint = torch.load(Path(args.init_from), map_location=device, weights_only=False)
-        # Mutates args in place: an Optuna search reads these back off the same
-        # namespace afterward and must not resample an architecture a warm start fixes.
         args.hidden_dim = int(init_checkpoint["hidden_dim"])
         args.num_layers = int(init_checkpoint["num_layers"])
         args.dropout = float(init_checkpoint["dropout"])
@@ -962,13 +1126,6 @@ def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("No rollout samples built; reduce --rollout-steps or --min-samples.")
     print(f"[data] rollouts train={len(train_samples)} val={len(val_samples)} test={len(test_samples)}")
 
-<<<<<<< Updated upstream
-    train_loader = torch.utils.data.DataLoader(
-        RolloutDataset(train_samples), batch_size=args.batch_size, shuffle=True, drop_last=False
-    )
-    val_loader = torch.utils.data.DataLoader(RolloutDataset(val_samples), batch_size=args.batch_size)
-    test_loader = torch.utils.data.DataLoader(RolloutDataset(test_samples), batch_size=args.batch_size)
-=======
     substep_counts = Counter(int(s["n_substeps"]) for s in train_samples)
     print(f"[data] PID substeps per model step: {dict(sorted(substep_counts.items()))}")
 
@@ -1004,10 +1161,8 @@ def train_rollout_model(
     trial=None,
     metric_prefix: str = "",
 ) -> dict[str, object]:
-    """Build loaders/model for one hyperparameter configuration and run the epoch
-    loop, selecting on rollout MAE. Used both for the final training pass and,
-    with `trial` set and `checkpoint_path`-saving skipped, for each Optuna trial.
-    """
+    """Build the model for one hyperparameter configuration and run the epoch
+    loop, selecting on rollout MAE."""
     device = data["device"]
     feature_index = data["feature_index"]
     scalers = data["scalers"]
@@ -1015,7 +1170,6 @@ def train_rollout_model(
 
     train_loader = make_rollout_loader(data["train_samples"], args.batch_size, True, args.seed)
     val_loader = make_rollout_loader(data["val_samples"], args.batch_size, False, args.seed)
->>>>>>> Stashed changes
 
     model = GRUModel(
         input_dim=len(FEATURE_NAMES), hidden_dim=args.hidden_dim,
@@ -1036,12 +1190,8 @@ def train_rollout_model(
     best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     best_epoch = 0
     epochs_without_improvement = 0
-<<<<<<< Updated upstream
-    history: List[Dict[str, float]] = []
-=======
     history: list[dict[str, float]] = []
     train_start = time.perf_counter()
->>>>>>> Stashed changes
 
     for epoch in range(1, args.epochs + 1):
         if args.curriculum_epochs > 0:
@@ -1053,7 +1203,7 @@ def train_rollout_model(
             horizon = int(args.rollout_steps)
 
         model.train()
-        losses: List[float] = []
+        losses: list[float] = []
         t0 = time.perf_counter()
 
         for batch in train_loader:
@@ -1164,9 +1314,8 @@ def finalize_rollout_run(
     val_rollout = evaluate_rollout(model, result["val_loader"], scalers, args, feature_index, eval_horizon, device)
 
     checkpoint_path = output_dir / args.checkpoint_name
-    torch.save(
+    atomic_torch_save(
         {
-            # Layout matches train_gru.py's checkpoints.
             "model_state_dict": model.state_dict(),
             "input_dim": len(FEATURE_NAMES),
             "hidden_dim": args.hidden_dim,
@@ -1191,20 +1340,13 @@ def finalize_rollout_run(
 
     report = {
         "checkpoint": str(checkpoint_path.resolve()),
-        "history_root": str(Path(args.history_root).resolve()),
+        "history_root": [str(Path(r).resolve()) for r in args.history_root],
         "selection_metric": "val_rollout_mae_temp",
         "eval_horizon_steps": eval_horizon,
         "best_epoch": best_epoch,
         "total_seconds": float(time.perf_counter() - run_start),
         "split": {
             "by": args.split_by,
-<<<<<<< Updated upstream
-            "config_key": args.config_key,
-            "n_train_runs": len(train_runs), "n_val_runs": len(val_runs), "n_test_runs": len(test_runs),
-            "n_distinct_configs": len(set(groups.values())),
-            **leak,
-            "train_runs": train_runs, "val_runs": val_runs, "test_runs": test_runs,
-=======
             **data["group_info"],
             "n_train_runs": len(data["train_runs"]), "n_val_runs": len(val_runs), "n_test_runs": len(test_runs),
             "n_distinct_configs": len(data["group_sizes"]),
@@ -1212,7 +1354,6 @@ def finalize_rollout_run(
             "largest_config_group": max(data["group_sizes"].values()),
             **data["leak"],
             "train_runs": data["train_runs"], "val_runs": val_runs, "test_runs": test_runs,
->>>>>>> Stashed changes
         },
         "rollout": {"train_steps": int(args.rollout_steps), "control_mode": args.control_mode,
                     "stride": int(args.rollout_stride), "tbptt_steps": int(args.tbptt_steps),
@@ -1246,8 +1387,6 @@ def finalize_rollout_run(
     print(f"checkpoint       : {checkpoint_path}")
     print(f"report           : {report_path}")
 
-<<<<<<< Updated upstream
-=======
     if mlflow is not None:
         log_metrics_with_prefix(mlflow, val_rollout, prefix="val_")
         if test_rollout:
@@ -1268,24 +1407,14 @@ def finalize_rollout_run(
 
 
 def suggest_tbptt_choices(rollout_steps: int) -> list[int]:
-    """--tbptt-steps candidates for an Optuna trial, scaled to the rollout horizon
-    actually being trained (--rollout-steps), not a fixed absolute value.
-
-    At rollout_steps=100 and up to 71 PID substeps per model step, full BPTT
-    (tbptt=0) backpropagates through up to 100*71=7100 sequential ops -- offering
-    that as a search candidate mostly just risks an OOM/very slow trial, so it's
-    only included at short horizons where it was already the validated default.
-    """
+    """--tbptt-steps candidates for an Optuna trial, scaled to the rollout horizon."""
     horizon = max(1, int(rollout_steps))
     truncated = sorted({max(1, horizon // 10), max(1, horizon // 4), max(1, horizon // 2)})
     return [0, *truncated] if horizon <= 40 else truncated
 
 
 def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namespace:
-    """Sample one trial's hyperparameters. Architecture (hidden_dim/num_layers/
-    dropout/layer_norm) is left untouched when --init-from is set:
-    prepare_rollout_data() has already pinned those to the warm-start
-    checkpoint's architecture, which can't change."""
+    """Sample one trial's hyperparameters."""
     updates: dict[str, object] = {}
     if not base_args.init_from:
         updates["hidden_dim"] = trial.suggest_categorical("hidden_dim", [32, 64, 96, 128, 192, 256])
@@ -1581,7 +1710,6 @@ def main() -> None:
     else:
         train_and_validate(args)
 
->>>>>>> Stashed changes
 
 if __name__ == "__main__":
     main()

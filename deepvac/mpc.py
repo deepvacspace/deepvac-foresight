@@ -180,13 +180,10 @@ def initialize_feature_window(
     ki: float,
     kd: float,
 ) -> np.ndarray:
-<<<<<<< Updated upstream
-=======
     """Flat placeholder window: constant temperature, zero control terms.
 
     Prefer initialize_feature_window_from_pid, which is a drop-in replacement.
     """
->>>>>>> Stashed changes
     rows = []
     for _ in range(window_steps):
         rows.append(make_feature_row(
@@ -206,8 +203,6 @@ def initialize_feature_window(
     return np.vstack(rows).astype(np.float32)
 
 
-<<<<<<< Updated upstream
-=======
 def initialize_feature_window_from_pid(
     feature_names: Sequence[str],
     window_steps: int,
@@ -236,7 +231,7 @@ def initialize_feature_window_from_pid(
     rows = []
     for _ in range(window_steps):
         terms = run_pid_substeps(
-            pid=pid, diff=diff, temp_start=start_temp,
+            pid=pid, diff=diff, temp_start=start_temp, temp_end=start_temp,
             temp_ref=target_temp, kp=kp, ki=ki, kd=kd, dt_s=dt_s,
             period_s=0.1, feature_scale=100.0,
         )
@@ -257,7 +252,6 @@ def initialize_feature_window_from_pid(
     return np.vstack(rows).astype(np.float32)
 
 
->>>>>>> Stashed changes
 def run_pid_substeps(
     *,
     pid: Any,

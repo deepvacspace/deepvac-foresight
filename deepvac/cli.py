@@ -18,8 +18,8 @@ import sys
 # Grouped to match the module layout; run `deepvac --list` for the live list.
 COMMANDS: dict[str, tuple[str, str]] = {
     # --- GRU digital twin --------------------------------------------------
-<<<<<<< Updated upstream
-    "train-gru": ("gru.train_gru", "Train/validate/tune/test the one-step GRU plant model."),
+    "train-gru": ("gru.train_gru", "Pretrain the one-step GRU plant model (stage 1)."),
+    "train-gru-rollout": ("gru.train_gru_rollout", "Train the GRU on rollouts, selected on rollout error (stage 2)."),
     "train-gru-multihorizon": ("gru.gru_multi_time", "Train/validate/test the multi-horizon GRU plant model."),
     "simulate-gru": ("gru.simulate_gru", "Closed-loop reconstruction via trained GRU + ChamberPID."),
     "simulate-runs": ("gru.simulate_runs", "Rank PID triplets via GRU + CODESYS PID simulation."),
@@ -30,14 +30,10 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "gp-build": ("gru.gp_build", "Build the historical PID candidate table for GRU ranking."),
     "mpc-build": ("gru.mpc_build", "Build the candidate table for history-seeded GRU MPC."),
     "diagnose-codesys": ("gru.diagnose_codesys", "Validate GRU replay-control + CODESYS PID reconstruction."),
-=======
-    "train-gru": ("gru.train_gru", "Pretrain the one-step GRU plant model (stage 1)."),
-    "train-gru-rollout": ("gru.train_gru_rollout", "Train the GRU on rollouts, selected on rollout error (stage 2)."),
     "twin-acceptance": ("gru.twin_acceptance", "Score a GRU checkpoint as a whole-run digital twin, live or offline."),
     "predict-run": ("gru.predict_run", "Predict a whole-run trajectory for a candidate PID, no chamber run needed."),
     "advise-pid": ("gru.advise_pid", "Suggest a PID triplet or adaptively control it via CEM search over the twin."),
     "train-cost-surrogate": ("gru.train_cost_surrogate", "Train a fast MLP to screen PID candidates before CEM."),
->>>>>>> Stashed changes
 
     # --- LSTM digital twin --------------------------------------------------
     "train-lstm": ("lstm.train_lstm", "Train/validate/tune/test the one-step LSTM plant model."),
@@ -45,7 +41,6 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "mpc-lstm": ("lstm.mpc_lstm", "Continuous LSTM + MPC PID scheduler (CEM/random shooting)."),
     "batch-mpc-lstm": ("lstm.batch_mpc_runs", "Batch LSTM + MPC runs across scenarios, compare results."),
     "train-lstm-legacy": ("lstm.lstm", "Older standalone LSTM pipeline, kept for comparison only."),
-    "train-gru-rollout": ("gru.train_gru_rollout", "Train the GRU on multi-step rollouts, selected on rollout error."),
 
     # --- Bayesian optimization / AI advisor (optimization/) ----------------
     "optimize-training-loop": ("optimization.training_loop", "Closed-loop band-BO runner against the live chamber."),
