@@ -63,7 +63,7 @@ def add_common_mpc_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--duration-s", type=float, default=1200.0)
     ap.add_argument("--dt-s", type=float, default=2.0, help="Model/logging step in seconds.")
     ap.add_argument("--precondition-ref", type=float, default=None,
-                    help="Reference used in the synthetic warmup window. Default: start-temp.")
+                    help="Unused. Kept so existing invocations still parse.")
 
     ap.add_argument("--window-steps", type=int, default=60,
                     help="Fallback only if checkpoint lacks window_steps.")
@@ -180,6 +180,13 @@ def initialize_feature_window(
     ki: float,
     kd: float,
 ) -> np.ndarray:
+<<<<<<< Updated upstream
+=======
+    """Flat placeholder window: constant temperature, zero control terms.
+
+    Prefer initialize_feature_window_from_pid, which is a drop-in replacement.
+    """
+>>>>>>> Stashed changes
     rows = []
     for _ in range(window_steps):
         rows.append(make_feature_row(
@@ -199,6 +206,58 @@ def initialize_feature_window(
     return np.vstack(rows).astype(np.float32)
 
 
+<<<<<<< Updated upstream
+=======
+def initialize_feature_window_from_pid(
+    feature_names: Sequence[str],
+    window_steps: int,
+    start_temp: float,
+    target_temp: float,
+    dt_s: float,
+    kp: float,
+    ki: float,
+    kd: float,
+) -> np.ndarray:
+    """Seed window for when no real telemetry is available: MPC's very first
+    decision, or an offline prediction for a candidate PID with no chamber run
+    behind it.
+
+    Holds temperature at start_temp while stepping a real ChamberPID/CodesysDiff
+    forward for window_steps ticks, so the seeded control terms reflect how long
+    that error has actually been sitting.
+
+    target_temp must be the run's actual upcoming setpoint, not start_temp: an
+    idle-to-idle error of ~0 builds no integrator state.
+    """
+    pid = ChamberPID()
+    diff = CodesysDiff()
+    diff.prev_value = start_temp
+
+    rows = []
+    for _ in range(window_steps):
+        terms = run_pid_substeps(
+            pid=pid, diff=diff, temp_start=start_temp,
+            temp_ref=target_temp, kp=kp, ki=ki, kd=kd, dt_s=dt_s,
+            period_s=0.1, feature_scale=100.0,
+        )
+        rows.append(make_feature_row(
+            feature_names,
+            temp=start_temp,
+            temp_ref=target_temp,
+            previous_temp=start_temp,
+            dt_s=dt_s,
+            u=terms["u"],
+            u_p=terms["u_p"],
+            u_i=terms["u_i"],
+            u_d=terms["u_d"],
+            kp=kp,
+            ki=ki,
+            kd=kd,
+        ))
+    return np.vstack(rows).astype(np.float32)
+
+
+>>>>>>> Stashed changes
 def run_pid_substeps(
     *,
     pid: Any,
@@ -888,16 +947,15 @@ def run_mpc_simulation(
     rng = np.random.default_rng(int(args.seed))
 
     start_temp = float(args.start_temp)
-    precondition_ref = start_temp if args.precondition_ref is None else float(args.precondition_ref)
     dt_s = float(args.dt_s)
     total_steps = max(1, int(math.ceil(float(args.duration_s) / dt_s)))
     hold_steps = max(1, int(math.ceil(float(args.mpc_hold_s) / dt_s)))
 
-    feature_window = initialize_feature_window(
+    feature_window = initialize_feature_window_from_pid(
         feature_names=feature_names,
         window_steps=window_steps,
         start_temp=start_temp,
-        precondition_ref=precondition_ref,
+        target_temp=float(args.target_temp),
         dt_s=dt_s,
         kp=float(args.kp_init),
         ki=float(args.ki_init),

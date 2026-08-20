@@ -19,9 +19,23 @@ replacement in mpc_gru.py, mpc_batch.py, and simulate_gru.py.
 
 Example -- fine-tune an existing 1-step checkpoint with a 40-step rollout loss:
 
+<<<<<<< Updated upstream
     python -m gru.train_gru_rollout \
         --init-from gru/validation_t1/gru_t1.pt \
         --rollout-steps 40 --epochs 40 --split-by pid-config
+=======
+Examples:
+
+    # One-shot, fine-tuning an existing 1-step checkpoint with a 100-step rollout loss.
+    python -m gru.train_gru_rollout \
+        --init-from gru/validation_t1/gru_t1.pt \
+        --rollout-steps 100 --epochs 40 --split-by pid-config
+
+    # Left running alongside an optimizer script collecting new chamber runs.
+    python -m gru.train_gru_rollout \
+        --init-from gru/validation_t1/gru_t1.pt --rollout-steps 100 \
+        --watch --watch-min-new-runs 5 --watch-interval-s 300
+>>>>>>> Stashed changes
 """
 
 from __future__ import annotations
@@ -32,7 +46,11 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+<<<<<<< Updated upstream
 from typing import Dict, List, Optional, Sequence, Tuple
+=======
+from typing import Any
+>>>>>>> Stashed changes
 
 import numpy as np
 import pandas as pd
@@ -59,6 +77,9 @@ from gru.model import GRUModel  # noqa: E402
 WORK_DIR = ROOT / "optimization"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_rollout"
+# Same directory gru/train_gru.py defaults to -- distinct --experiment-name values
+# keep the two model families apart within one shared MLflow tracking store.
+DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"
 
 # gru_common.CodesysDiff / ChamberPID constants.
 DIFF_DC = 0.995
@@ -109,7 +130,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--seed", type=int, default=42)
 
     # --- Rollout ---------------------------------------------------------------
-    ap.add_argument("--rollout-steps", type=int, default=40,
+    ap.add_argument("--rollout-steps", type=int, default=120,
                     help="Unroll length used for the training loss. Match the MPC horizon.")
     ap.add_argument("--eval-horizon-steps", type=int, default=None,
                     help="Unroll length for validation/test rollouts. Default: --rollout-steps.")
@@ -161,6 +182,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--hidden-dim", type=int, default=96)
     ap.add_argument("--num-layers", type=int, default=1)
     ap.add_argument("--dropout", type=float, default=0.044)
+    ap.add_argument(
+        "--layer-norm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use a LayerNorm-GRU (normalizes each gate's pre-activation every step) "
+            "instead of plain nn.GRU. Plain nn.GRU has no normalization inside the "
+            "recurrence, only in the head after the last step -- over a 100+-step "
+            "free-running rollout that's one of the things letting per-step drift "
+            "compound. Trains slower step-for-step (no cuDNN fused kernel)."
+        ),
+    )
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--patience", type=int, default=10)
@@ -173,7 +206,178 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--checkpoint-name", default="gru_rollout.pt")
     ap.add_argument("--report-name", default="rollout_report.json")
 
+<<<<<<< Updated upstream
     return ap
+
+
+=======
+    # --- Optuna hyperparameter search --------------------------------------------
+    ap.add_argument(
+        "--optuna-trials",
+        type=int,
+        default=0,
+        help=(
+            "Run this many Optuna trials over model/optimization hyperparameters "
+            "before the final training pass, selecting on val_rollout_mae. 0 disables "
+            "search and trains once with the CLI hyperparameters as given. Each trial "
+            "reuses the rollout samples built once up front -- only --hidden-dim, "
+            "--num-layers, --dropout, --batch-size, --lr, --weight-decay, --grad-clip, "
+            "--huber-beta, --bias-weight, and --tbptt-steps are searched. Architecture "
+            "(--hidden-dim/--num-layers/--dropout) is left fixed at whatever --init-from "
+            "carries, since a warm start's architecture can't change."
+        ),
+    )
+    ap.add_argument("--optuna-epochs", type=int, default=15,
+                    help="Max epochs per Optuna trial. Kept low by default since rollout "
+                         "epochs are expensive; the final pass still trains for --epochs.")
+    ap.add_argument("--optuna-timeout-s", type=float, default=None,
+                    help="Stop starting new trials after this many seconds. Default: no timeout.")
+    ap.add_argument(
+        "--optuna-pruner",
+        choices=["median", "none"],
+        default="median",
+        help="Prune weak trials early based on val_rollout_mae.",
+    )
+    ap.add_argument("--optuna-storage", default=None,
+                    help="Optuna storage URL, e.g. sqlite:///output_dir/optuna.db, letting a "
+                         "study resume across interrupted runs. Default: in-memory, one-shot.")
+
+    # --- MLflow experiment tracking -----------------------------------------------
+    ap.add_argument(
+        "--experiment-name",
+        default="gru_rollout",
+        help="Experiment name used for both MLflow and the Optuna study.",
+    )
+    ap.add_argument("--no-mlflow", action="store_true",
+                    help="Disable MLflow experiment tracking.")
+    ap.add_argument("--mlflow-tracking-uri", default=None,
+                    help=f"MLflow tracking URI. Default: a local file store under {DEFAULT_MLFLOW_DIR}.")
+    ap.add_argument("--mlflow-run-name", default=None,
+                    help="Optional MLflow run name for the parent run. --watch names each pass's "
+                         "run automatically when this is left unset.")
+
+    # --- Split locking -----------------------------------------------------------
+    ap.add_argument(
+        "--lock-split",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Compute the val/test split once and reuse it on every later run so "
+            "'improved' is comparable across them. New runs since the lock become "
+            "training data; new runs that now cluster with a locked val/test run are "
+            "excluded rather than risking leakage. Default: on for --watch, off otherwise."
+        ),
+    )
+    ap.add_argument("--split-lock-path", default=None,
+                    help="Where the locked split is stored. Default: --output-dir/split_lock.json.")
+
+    # --- Watch mode ----------------------------------------------------------------
+    ap.add_argument(
+        "--watch",
+        action="store_true",
+        help="Poll --history-root and retrain when enough new runs appear, instead of running once.",
+    )
+    ap.add_argument("--watch-interval-s", type=float, default=300.0,
+                    help="Seconds between polls for new runs.")
+    ap.add_argument("--watch-min-new-runs", type=int, default=3,
+                    help="Retrain once at least this many not-yet-seen run folders appear.")
+    ap.add_argument("--watch-max-passes", type=int, default=0,
+                    help="Stop after this many training passes. 0 runs until interrupted.")
+    ap.add_argument("--promoted-checkpoint", default=None,
+                    help="Stable path consumers should load. Default: --output-dir/promoted.pt.")
+    ap.add_argument("--promote-min-improvement", type=float, default=0.0,
+                    help="Minimum val_rollout_mae drop (degC) required to promote a pass's checkpoint.")
+    ap.add_argument("--watch-state-path", default=None,
+                    help="Default: --output-dir/watch_state.json.")
+    ap.add_argument("--watch-history-csv", default=None,
+                    help="Default: --output-dir/watch_history.csv.")
+
+    return ap
+
+
+def format_hms(seconds: float) -> str:
+    """Format a duration in seconds as hh:mm:ss (hours unbounded, e.g. 26:03:41)."""
+    total = int(round(max(0.0, float(seconds))))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:d}:{minutes:02d}:{secs:02d}"
+
+
+def atomic_torch_save(payload: dict[str, object], path: Path) -> None:
+    """Save a checkpoint so a concurrent reader never observes a partial file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
+
+
+def atomic_copy(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f"{dst.name}.tmp{os.getpid()}")
+    tmp.write_bytes(Path(src).read_bytes())
+    os.replace(tmp, dst)
+
+
+>>>>>>> Stashed changes
+# -----------------------------------------------------------------------------
+# MLflow experiment tracking / Optuna hyperparameter search
+#
+# Mirrors the pattern in gru/train_gru.py -- both dependencies are optional
+# (see pyproject.toml's [training] extra) and imported lazily so plain
+# single-run training keeps working with neither installed.
+# -----------------------------------------------------------------------------
+
+
+def clone_args(args: argparse.Namespace, updates: dict[str, object] | None = None) -> argparse.Namespace:
+    next_args = copy.deepcopy(args)
+    for key, value in (updates or {}).items():
+        setattr(next_args, key, value)
+    return next_args
+
+
+def setup_mlflow(args: argparse.Namespace):
+    if args.no_mlflow:
+        return None
+
+    try:
+        import mlflow
+    except ImportError as exc:
+        raise RuntimeError(
+            "MLflow tracking is enabled but mlflow is not installed. "
+            "Install it with: pip install mlflow, or pass --no-mlflow."
+        ) from exc
+
+    tracking_uri = args.mlflow_tracking_uri or DEFAULT_MLFLOW_DIR.resolve().as_uri()
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment(args.experiment_name)
+    print(f"[mlflow] tracking URI: {tracking_uri}")
+    print(f"[mlflow] experiment:   {args.experiment_name}")
+    return mlflow
+
+
+def mlflow_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(str(item) for item in value)
+    return str(value)
+
+
+def log_params_with_prefix(mlflow, params: dict[str, Any], prefix: str = "") -> None:
+    if mlflow is None:
+        return
+    mlflow.log_params({f"{prefix}{key}": mlflow_value(value) for key, value in params.items()})
+
+
+def log_metrics_with_prefix(mlflow, metrics: dict[str, Any], prefix: str = "", step: int | None = None) -> None:
+    if mlflow is None:
+        return
+    numeric = {f"{prefix}{k}": float(v) for k, v in metrics.items() if isinstance(v, (int, float))}
+    if numeric:
+        mlflow.log_metrics(numeric, step=step)
 
 
 # -----------------------------------------------------------------------------
@@ -196,13 +400,25 @@ def torch_pid_substeps(
     u_min: float,
     u_max: float,
     i_reverse_mul: float,
+<<<<<<< Updated upstream
 ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
     """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold").
 
     Logged kp and ki are always >= 1, so the scalar version's p_coef == 0 and
     effective_i == 0 guards are omitted.
+=======
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold").
+
+    Mirrors deepvac.mpc_batch._vec_pid_step's safe-division guards: kp == 0 and
+    effective_i == 0 both occur in real band tables, and dividing by them directly
+    -- even inside a torch.where branch that forward-pass masks away -- still
+    differentiates the discarded 0/0 branch and poisons every gradient with nan.
+>>>>>>> Stashed changes
     """
     u = u_p = u_d = torch.zeros_like(temp)
+    zero = torch.zeros_like(temp)
+    one = torch.ones_like(temp)
 
     for _ in range(n_substeps):
         # temp is held constant across substeps, so the filter decays after the
@@ -213,14 +429,18 @@ def torch_pid_substeps(
         diff_out = DIFF_GAIN * torch.clamp(diff_filter, -DIFF_CLIP, DIFF_CLIP)
 
         delta = temp_ref - temp
-        inv_kp = 1.0 / kp
+        # The scalar/numpy controllers return 0 and leave state untouched when kp == 0.
+        kp_live = kp != 0.0
+        safe_kp = torch.where(kp_live, kp, one)
+        inv_kp = 1.0 / safe_kp
 
         u_p = inv_kp * delta
         effective_i = torch.where(delta * i_part < 0.0, ki * i_reverse_mul, ki)
-        can_integrate = torch.abs(delta) < (1.2 * kp)
+        can_integrate = kp_live & (effective_i != 0.0) & (torch.abs(delta) < (1.2 * kp))
+        safe_effective_i = torch.where(effective_i != 0.0, effective_i, one)
         i_part = torch.where(
             can_integrate,
-            i_part + inv_kp * (delta * 0.1 / effective_i),
+            i_part + inv_kp * (delta * 0.1 / safe_effective_i),
             i_part,
         )
         u_d = inv_kp * (kd * -diff_out)
@@ -228,9 +448,15 @@ def torch_pid_substeps(
         i_part = torch.clamp(i_part, u_min, u_max)
         u_d = torch.clamp(u_d, -D_PART_CLIP, D_PART_CLIP)
 
+<<<<<<< Updated upstream
         # u sums the unclipped p_part with the clipped i/d parts, then clips.
         u = torch.clamp(u_p + i_part + u_d, u_min, u_max)
         u_p = torch.clamp(u_p, u_min, u_max)
+=======
+        u = torch.where(kp_live, torch.clamp(u_p + i_part + u_d, u_min, u_max), zero)
+        u_p = torch.where(kp_live, torch.clamp(u_p, u_min, u_max), zero)
+        u_d = torch.where(kp_live, u_d, zero)
+>>>>>>> Stashed changes
 
     terms = {
         "temp_u": u * feature_scale,
@@ -646,17 +872,33 @@ def make_scalers(
     return scalers, x_scaler, y_scaler
 
 
+<<<<<<< Updated upstream
 def main() -> None:
     args = build_arg_parser().parse_args()
     set_seed(args.seed)
+=======
+def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
+    """Load runs, resolve the split, and build the rollout sample lists once.
+>>>>>>> Stashed changes
 
+    Deliberately excludes anything that depends on the hyperparameters an Optuna
+    search varies (batch size, model architecture): those are applied later in
+    train_rollout_model() so a search reuses this -- expensive -- data build
+    across all its trials instead of repeating it per trial.
+    """
     if args.rollout_steps < 1:
         raise ValueError("--rollout-steps must be >= 1")
     if args.rollout_stride < 1 or args.eval_stride < 1:
         raise ValueError("--rollout-stride and --eval-stride must be >= 1")
     eval_horizon = int(args.eval_horizon_steps if args.eval_horizon_steps is not None else args.rollout_steps)
 
-    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
+    cuda_available = torch.cuda.is_available()
+    device = torch.device("cuda" if cuda_available and not args.cpu else "cpu")
+    if device.type == "cuda":
+        print(f"[device] using cuda ({torch.cuda.get_device_name(device)}), cuda available: {cuda_available}")
+    else:
+        reason = "--cpu was passed" if args.cpu else "torch.cuda.is_available() is False"
+        print(f"[device] using cpu ({reason}), cuda available: {cuda_available}")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     feature_index = {name: i for i, name in enumerate(FEATURE_NAMES)}
@@ -697,9 +939,12 @@ def main() -> None:
 
         _ensure_sklearn_stub()
         init_checkpoint = torch.load(Path(args.init_from), map_location=device, weights_only=False)
+        # Mutates args in place: an Optuna search reads these back off the same
+        # namespace afterward and must not resample an architecture a warm start fixes.
         args.hidden_dim = int(init_checkpoint["hidden_dim"])
         args.num_layers = int(init_checkpoint["num_layers"])
         args.dropout = float(init_checkpoint["dropout"])
+        args.layer_norm = bool(init_checkpoint.get("layer_norm", False))
         args.window_steps = int(init_checkpoint.get("window_steps", args.window_steps))
         print(f"[init] warm-starting from {args.init_from} "
               f"(hidden={args.hidden_dim} layers={args.num_layers} window={args.window_steps})")
@@ -717,30 +962,86 @@ def main() -> None:
         raise RuntimeError("No rollout samples built; reduce --rollout-steps or --min-samples.")
     print(f"[data] rollouts train={len(train_samples)} val={len(val_samples)} test={len(test_samples)}")
 
+<<<<<<< Updated upstream
     train_loader = torch.utils.data.DataLoader(
         RolloutDataset(train_samples), batch_size=args.batch_size, shuffle=True, drop_last=False
     )
     val_loader = torch.utils.data.DataLoader(RolloutDataset(val_samples), batch_size=args.batch_size)
     test_loader = torch.utils.data.DataLoader(RolloutDataset(test_samples), batch_size=args.batch_size)
+=======
+    substep_counts = Counter(int(s["n_substeps"]) for s in train_samples)
+    print(f"[data] PID substeps per model step: {dict(sorted(substep_counts.items()))}")
+
+    return {
+        "device": device,
+        "output_dir": output_dir,
+        "feature_index": feature_index,
+        "frames": frames,
+        "skipped": skipped,
+        "group_info": group_info,
+        "group_sizes": group_sizes,
+        "train_runs": train_runs,
+        "val_runs": val_runs,
+        "test_runs": test_runs,
+        "excluded_by_lock": excluded_by_lock,
+        "leak": leak,
+        "init_checkpoint": init_checkpoint,
+        "scalers": scalers,
+        "x_scaler": x_scaler,
+        "y_scaler": y_scaler,
+        "train_samples": train_samples,
+        "val_samples": val_samples,
+        "test_samples": test_samples,
+        "substep_counts": substep_counts,
+        "eval_horizon": eval_horizon,
+    }
+
+
+def train_rollout_model(
+    args: argparse.Namespace,
+    data: dict[str, object],
+    mlflow=None,
+    trial=None,
+    metric_prefix: str = "",
+) -> dict[str, object]:
+    """Build loaders/model for one hyperparameter configuration and run the epoch
+    loop, selecting on rollout MAE. Used both for the final training pass and,
+    with `trial` set and `checkpoint_path`-saving skipped, for each Optuna trial.
+    """
+    device = data["device"]
+    feature_index = data["feature_index"]
+    scalers = data["scalers"]
+    eval_horizon = data["eval_horizon"]
+
+    train_loader = make_rollout_loader(data["train_samples"], args.batch_size, True, args.seed)
+    val_loader = make_rollout_loader(data["val_samples"], args.batch_size, False, args.seed)
+>>>>>>> Stashed changes
 
     model = GRUModel(
         input_dim=len(FEATURE_NAMES), hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers, dropout=args.dropout,
+        num_layers=args.num_layers, dropout=args.dropout, layer_norm=args.layer_norm,
     ).to(device)
-    if init_checkpoint is not None:
-        model.load_state_dict(init_checkpoint["model_state_dict"])
+    if data["init_checkpoint"] is not None:
+        model.load_state_dict(data["init_checkpoint"]["model_state_dict"])
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = nn.SmoothL1Loss(beta=args.huber_beta)
 
+    tag = f"[trial {trial.number}]" if trial is not None else "[epoch]"
     baseline = evaluate_rollout(model, val_loader, scalers, args, feature_index, eval_horizon, device)
-    print(f"[epoch  0] (init) val_rollout_mae={baseline['mae_temp']:.4f} bias={baseline['bias_temp']:+.4f}")
+    print(f"{tag} (init) val_rollout_mae={baseline['mae_temp']:.4f} bias={baseline['bias_temp']:+.4f}")
+    log_metrics_with_prefix(mlflow, {"val_rollout_mae_at_init": baseline["mae_temp"]}, prefix=metric_prefix)
 
     best_metric = float("inf")
     best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     best_epoch = 0
     epochs_without_improvement = 0
+<<<<<<< Updated upstream
     history: List[Dict[str, float]] = []
+=======
+    history: list[dict[str, float]] = []
+    train_start = time.perf_counter()
+>>>>>>> Stashed changes
 
     for epoch in range(1, args.epochs + 1):
         if args.curriculum_epochs > 0:
@@ -772,7 +1073,7 @@ def main() -> None:
             losses.append(float(loss.item()))
 
         val_metrics = evaluate_rollout(model, val_loader, scalers, args, feature_index, eval_horizon, device)
-        val_one_step = evaluate_one_step(model, frames, val_runs, scalers, args, device)
+        val_one_step = evaluate_one_step(model, data["frames"], data["val_runs"], scalers, args, device)
         metric = float(val_metrics["mae_temp"])
 
         row = {
@@ -786,12 +1087,25 @@ def main() -> None:
             "seconds": float(time.perf_counter() - t0),
         }
         history.append(row)
+        log_metrics_with_prefix(
+            mlflow, {k: v for k, v in row.items() if k != "epoch"}, prefix=metric_prefix, step=epoch
+        )
+
         print(
-            f"[epoch {epoch:2d}] h={horizon:2d} train_loss={row['train_loss']:.5f} "
+            f"{tag} epoch={epoch:2d}/{args.epochs} h={horizon:2d} train_loss={row['train_loss']:.5f} "
             f"val_rollout_mae={metric:.4f} bias={row['val_rollout_bias']:+.4f} "
             f"final_step_mae={row['val_rollout_final_mae']:.4f} "
-            f"val_1step_mae={row['val_mae_delta_t1']:.5f} ({row['seconds']:.0f}s)"
+            f"val_1step_mae={row['val_mae_delta_t1']:.5f} "
+            f"(epoch {format_hms(row['seconds'])}, elapsed {format_hms(time.perf_counter() - train_start)})"
         )
+
+        if trial is not None:
+            trial.report(metric, step=epoch)
+            if trial.should_prune():
+                import optuna
+
+                print(f"[trial {trial.number}] pruned at epoch {epoch}")
+                raise optuna.TrialPruned()
 
         if metric < best_metric:
             best_metric = metric
@@ -801,18 +1115,53 @@ def main() -> None:
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= args.patience:
-                print(f"[stop] no rollout improvement for {args.patience} epochs")
+                print(f"{tag} stopping: no rollout improvement for {args.patience} epochs")
                 break
 
     model.load_state_dict(best_state)
     model.to(device)
 
-    print(f"[best] epoch {best_epoch}, val_rollout_mae={best_metric:.4f}")
+    print(f"{tag} best epoch {best_epoch}, val_rollout_mae={best_metric:.4f}")
+    log_metrics_with_prefix(
+        mlflow, {"best_epoch": float(best_epoch), "best_val_rollout_mae": best_metric}, prefix=metric_prefix
+    )
 
+    return {
+        "model": model,
+        "best_state": best_state,
+        "best_metric": best_metric,
+        "best_epoch": best_epoch,
+        "history": history,
+        "baseline": baseline,
+        "val_loader": val_loader,
+        "seconds": float(time.perf_counter() - train_start),
+    }
+
+
+def finalize_rollout_run(
+    args: argparse.Namespace,
+    data: dict[str, object],
+    result: dict[str, object],
+    run_start: float,
+    mlflow=None,
+) -> dict[str, object]:
+    """Evaluate the trained model on test, save the checkpoint, and write the report.
+    Runs once for the final training pass, not per Optuna trial."""
+    device = data["device"]
+    feature_index = data["feature_index"]
+    scalers = data["scalers"]
+    eval_horizon = data["eval_horizon"]
+    output_dir = data["output_dir"]
+    frames, val_runs, test_runs = data["frames"], data["val_runs"], data["test_runs"]
+    model = result["model"]
+    best_metric, best_epoch = result["best_metric"], result["best_epoch"]
+
+    test_loader = make_rollout_loader(data["test_samples"], args.batch_size, False, args.seed) \
+        if data["test_samples"] else None
     test_rollout = evaluate_rollout(model, test_loader, scalers, args, feature_index, eval_horizon, device) \
-        if test_samples else {}
+        if test_loader is not None else {}
     test_one_step = evaluate_one_step(model, frames, test_runs, scalers, args, device)
-    val_rollout = evaluate_rollout(model, val_loader, scalers, args, feature_index, eval_horizon, device)
+    val_rollout = evaluate_rollout(model, result["val_loader"], scalers, args, feature_index, eval_horizon, device)
 
     checkpoint_path = output_dir / args.checkpoint_name
     torch.save(
@@ -823,8 +1172,9 @@ def main() -> None:
             "hidden_dim": args.hidden_dim,
             "num_layers": args.num_layers,
             "dropout": args.dropout,
-            "x_scaler": x_scaler,
-            "y_scaler": y_scaler,
+            "layer_norm": bool(args.layer_norm),
+            "x_scaler": data["x_scaler"],
+            "y_scaler": data["y_scaler"],
             "feature_names": list(FEATURE_NAMES),
             "window_steps": int(args.window_steps),
             "target": "temp(t+1 row) - temp(t)",
@@ -845,13 +1195,24 @@ def main() -> None:
         "selection_metric": "val_rollout_mae_temp",
         "eval_horizon_steps": eval_horizon,
         "best_epoch": best_epoch,
+        "total_seconds": float(time.perf_counter() - run_start),
         "split": {
             "by": args.split_by,
+<<<<<<< Updated upstream
             "config_key": args.config_key,
             "n_train_runs": len(train_runs), "n_val_runs": len(val_runs), "n_test_runs": len(test_runs),
             "n_distinct_configs": len(set(groups.values())),
             **leak,
             "train_runs": train_runs, "val_runs": val_runs, "test_runs": test_runs,
+=======
+            **data["group_info"],
+            "n_train_runs": len(data["train_runs"]), "n_val_runs": len(val_runs), "n_test_runs": len(test_runs),
+            "n_distinct_configs": len(data["group_sizes"]),
+            "n_singleton_configs": sum(1 for n in data["group_sizes"].values() if n == 1),
+            "largest_config_group": max(data["group_sizes"].values()),
+            **data["leak"],
+            "train_runs": data["train_runs"], "val_runs": val_runs, "test_runs": test_runs,
+>>>>>>> Stashed changes
         },
         "rollout": {"train_steps": int(args.rollout_steps), "control_mode": args.control_mode,
                     "stride": int(args.rollout_stride), "tbptt_steps": int(args.tbptt_steps),
@@ -860,9 +1221,17 @@ def main() -> None:
         "test_rollout": test_rollout,
         "val_one_step": evaluate_one_step(model, frames, val_runs, scalers, args, device),
         "test_one_step": test_one_step,
-        "val_rollout_at_init": baseline,
-        "history": history,
-        "skipped_runs": skipped,
+        "val_rollout_at_init": result["baseline"],
+        "history": result["history"],
+        "skipped_runs": data["skipped"],
+        "final_hyperparameters": {
+            "hidden_dim": args.hidden_dim, "num_layers": args.num_layers, "dropout": args.dropout,
+            "layer_norm": bool(args.layer_norm),
+            "batch_size": args.batch_size, "lr": args.lr, "weight_decay": args.weight_decay,
+            "grad_clip": args.grad_clip, "huber_beta": args.huber_beta, "bias_weight": args.bias_weight,
+            "tbptt_steps": args.tbptt_steps,
+        },
+        "optuna_trials": int(args.optuna_trials),
     }
     report_path = output_dir / args.report_name
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -873,9 +1242,346 @@ def main() -> None:
         print(f"test rollout     : mae={test_rollout['mae_temp']:.4f} bias={test_rollout['bias_temp']:+.4f} "
               f"final_step_mae={test_rollout['mae_final_step']:.4f}")
     print(f"test 1-step      : mae={test_one_step['mae_delta_t1']:.5f} (reported for comparison only)")
+    print(f"total time       : {format_hms(report['total_seconds'])}")
     print(f"checkpoint       : {checkpoint_path}")
     print(f"report           : {report_path}")
 
+<<<<<<< Updated upstream
+=======
+    if mlflow is not None:
+        log_metrics_with_prefix(mlflow, val_rollout, prefix="val_")
+        if test_rollout:
+            log_metrics_with_prefix(mlflow, test_rollout, prefix="test_")
+        mlflow.log_metric("total_seconds", report["total_seconds"])
+        mlflow.log_artifact(str(checkpoint_path), artifact_path="model")
+        mlflow.log_artifact(str(report_path), artifact_path="report")
+
+    return {
+        "checkpoint_path": checkpoint_path,
+        "report_path": report_path,
+        "val_rollout_mae": float(best_metric),
+        "best_epoch": int(best_epoch),
+        "n_runs": len(frames),
+        "train_runs": data["train_runs"], "val_runs": val_runs, "test_runs": test_runs,
+        "excluded_by_lock": data["excluded_by_lock"],
+    }
+
+
+def suggest_tbptt_choices(rollout_steps: int) -> list[int]:
+    """--tbptt-steps candidates for an Optuna trial, scaled to the rollout horizon
+    actually being trained (--rollout-steps), not a fixed absolute value.
+
+    At rollout_steps=100 and up to 71 PID substeps per model step, full BPTT
+    (tbptt=0) backpropagates through up to 100*71=7100 sequential ops -- offering
+    that as a search candidate mostly just risks an OOM/very slow trial, so it's
+    only included at short horizons where it was already the validated default.
+    """
+    horizon = max(1, int(rollout_steps))
+    truncated = sorted({max(1, horizon // 10), max(1, horizon // 4), max(1, horizon // 2)})
+    return [0, *truncated] if horizon <= 40 else truncated
+
+
+def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namespace:
+    """Sample one trial's hyperparameters. Architecture (hidden_dim/num_layers/
+    dropout/layer_norm) is left untouched when --init-from is set:
+    prepare_rollout_data() has already pinned those to the warm-start
+    checkpoint's architecture, which can't change."""
+    updates: dict[str, object] = {}
+    if not base_args.init_from:
+        updates["hidden_dim"] = trial.suggest_categorical("hidden_dim", [32, 64, 96, 128, 192, 256])
+        updates["num_layers"] = trial.suggest_int("num_layers", 1, 3)
+        updates["dropout"] = trial.suggest_float("dropout", 0.0, 0.40)
+        updates["layer_norm"] = trial.suggest_categorical("layer_norm", [False, True])
+    updates["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    updates["lr"] = trial.suggest_float("lr", 1e-5, 3e-3, log=True)
+    updates["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
+    updates["grad_clip"] = trial.suggest_float("grad_clip", 0.5, 5.0)
+    updates["huber_beta"] = trial.suggest_float("huber_beta", 0.05, 1.0)
+    updates["bias_weight"] = trial.suggest_float("bias_weight", 0.0, 0.5)
+    updates["tbptt_steps"] = trial.suggest_categorical(
+        "tbptt_steps", suggest_tbptt_choices(base_args.rollout_steps)
+    )
+    updates["epochs"] = base_args.optuna_epochs
+    updates["patience"] = min(base_args.patience, max(5, base_args.optuna_epochs // 2))
+    return clone_args(base_args, updates)
+
+
+def run_optuna(
+    args: argparse.Namespace, data: dict[str, object], mlflow=None
+) -> argparse.Namespace:
+    """Search hyperparameters against the already-built rollout dataset, and
+    return an args namespace carrying the best trial's values."""
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RuntimeError(
+            "Optuna tuning was requested but optuna is not installed. "
+            "Install it with: pip install optuna, or pass --optuna-trials 0."
+        ) from exc
+
+    pruner = (
+        optuna.pruners.MedianPruner(n_warmup_steps=5)
+        if args.optuna_pruner == "median"
+        else optuna.pruners.NopPruner()
+    )
+    study = optuna.create_study(
+        direction="minimize",
+        study_name=args.experiment_name,
+        storage=args.optuna_storage,
+        load_if_exists=bool(args.optuna_storage),
+        pruner=pruner,
+    )
+
+    def objective(trial):
+        trial_args = suggest_optuna_args(trial, args)
+        set_seed(args.seed + trial.number)
+        print(f"[trial {trial.number}] starting: {trial.params}")
+        try:
+            if mlflow is None:
+                result = train_rollout_model(trial_args, data, trial=trial)
+            else:
+                with mlflow.start_run(run_name=f"optuna_trial_{trial.number}", nested=True):
+                    mlflow.set_tag("phase", "optuna_trial")
+                    mlflow.log_param("trial_number", trial.number)
+                    log_params_with_prefix(mlflow, trial.params, prefix="trial_")
+                    result = train_rollout_model(
+                        trial_args, data, mlflow=mlflow, trial=trial, metric_prefix="trial_"
+                    )
+                    mlflow.log_metric("trial_objective", float(result["best_metric"]))
+            return float(result["best_metric"])
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    print("\n=== Optuna tuning ===")
+    study.optimize(
+        objective, n_trials=args.optuna_trials, timeout=args.optuna_timeout_s,
+        catch=(torch.OutOfMemoryError,), gc_after_trial=True,
+    )
+    n_failed = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.FAIL)
+    if n_failed:
+        print(f"[optuna] {n_failed}/{len(study.trials)} trial(s) failed (see [W] warnings above) and were skipped")
+    if study.trials and not any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials):
+        raise RuntimeError(
+            f"All {len(study.trials)} Optuna trials failed -- nothing to select from. "
+            "Common cause: a CUDA OOM on every sampled hidden_dim/batch_size/layer_norm "
+            "combination -- the model got too large for available GPU memory. Try again "
+            "with a shorter --rollout-steps, or narrow the ranges in suggest_optuna_args() "
+            "if this keeps happening."
+        )
+    print(f"Best trial: {study.best_trial.number}")
+    print(f"Best val_rollout_mae: {study.best_value:.4f}")
+    print(f"Best params: {study.best_params}")
+
+    if mlflow is not None:
+        mlflow.log_metric("optuna_best_val_rollout_mae", float(study.best_value))
+        mlflow.log_param("optuna_best_trial", study.best_trial.number)
+        log_params_with_prefix(mlflow, study.best_params, prefix="optuna_best_")
+
+    output_dir = Path(args.output_dir)
+    study.trials_dataframe().to_csv(output_dir / "optuna_trials.csv", index=False)
+    (output_dir / "optuna_best_params.json").write_text(
+        json.dumps({"best_value": study.best_value, "best_params": study.best_params}, indent=2),
+        encoding="utf-8",
+    )
+
+    final_updates = dict(study.best_params)
+    final_updates["epochs"] = args.epochs
+    final_updates["patience"] = args.patience
+    return clone_args(args, final_updates)
+
+
+def train_and_validate(args: argparse.Namespace) -> dict[str, object]:
+    """Run one full data-load/split/[optuna]/train/evaluate pass and return its
+    key results."""
+    run_start = time.perf_counter()
+    set_seed(args.seed)
+
+    mlflow = setup_mlflow(args)
+    run_context = mlflow.start_run(run_name=args.mlflow_run_name) if mlflow is not None else None
+    if run_context is not None:
+        run_context.__enter__()
+
+    try:
+        data = prepare_rollout_data(args)
+
+        if mlflow is not None:
+            mlflow.set_tag("model_family", "gru_rollout")
+            mlflow.set_tag("target", "temp(t+1 row) - temp(t)")
+            mlflow.set_tag("control_mode", args.control_mode)
+            log_params_with_prefix(mlflow, vars(args))
+            mlflow.log_params({
+                "num_train_rollouts": len(data["train_samples"]),
+                "num_val_rollouts": len(data["val_samples"]),
+                "num_test_rollouts": len(data["test_samples"]),
+            })
+
+        final_args = args
+        if args.optuna_trials > 0:
+            final_args = run_optuna(args, data, mlflow)
+            print(
+                "\n=== Final training with best Optuna parameters ===\n"
+                f"Using hidden_dim={final_args.hidden_dim}, num_layers={final_args.num_layers}, "
+                f"dropout={final_args.dropout:.3f}, layer_norm={final_args.layer_norm}, "
+                f"batch_size={final_args.batch_size}, "
+                f"lr={final_args.lr:.6g}, weight_decay={final_args.weight_decay:.6g}, "
+                f"grad_clip={final_args.grad_clip:.3f}, huber_beta={final_args.huber_beta:.3f}, "
+                f"bias_weight={final_args.bias_weight:.3f}, tbptt_steps={final_args.tbptt_steps}"
+            )
+            log_params_with_prefix(mlflow, vars(final_args), prefix="final_")
+
+        print("\n=== Training ===")
+        set_seed(final_args.seed)
+        result = train_rollout_model(
+            final_args, data, mlflow=mlflow, metric_prefix="final_" if args.optuna_trials > 0 else ""
+        )
+        return finalize_rollout_run(final_args, data, result, run_start, mlflow=mlflow)
+    finally:
+        if run_context is not None:
+            run_context.__exit__(*sys.exc_info())
+
+
+# -----------------------------------------------------------------------------
+# Watch mode
+# -----------------------------------------------------------------------------
+
+
+def discover_run_ids(history_roots: Sequence[str]) -> set:
+    ids: set = set()
+    for root in history_roots:
+        root_path = Path(root)
+        if root_path.exists():
+            ids |= {p.name for p in root_path.iterdir() if p.is_dir()}
+    return ids
+
+
+def load_watch_state(path: Path) -> dict[str, object]:
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return {"seen_run_ids": [], "promoted_metric": None, "promoted_at": None, "n_passes": 0}
+
+
+def save_watch_state(path: Path, state: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def append_watch_history_row(path: Path, row: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    frame = pd.DataFrame([row])
+    frame.to_csv(path, mode="a", header=write_header, index=False)
+
+
+def run_watch_loop(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    promoted_path = Path(args.promoted_checkpoint or (output_dir / "promoted.pt"))
+    state_path = Path(args.watch_state_path or (output_dir / "watch_state.json"))
+    history_csv = Path(args.watch_history_csv or (output_dir / "watch_history.csv"))
+    split_lock_path = Path(args.split_lock_path or (output_dir / "split_lock.json"))
+    user_init_from = args.init_from
+
+    state = load_watch_state(state_path)
+    seen_run_ids = set(state.get("seen_run_ids") or [])
+
+    print(f"[watch] history root(s) : {', '.join(args.history_root)}")
+    print(f"[watch] promoted ckpt   : {promoted_path}")
+    print(f"[watch] split lock      : {split_lock_path}")
+    print(f"[watch] poll interval   : {args.watch_interval_s:g}s, min new runs: {args.watch_min_new_runs}")
+    print(f"[watch] already seen    : {len(seen_run_ids)} run folders, "
+          f"{state.get('n_passes', 0)} pass(es) so far, "
+          f"promoted metric so far: {state.get('promoted_metric')}")
+
+    pass_idx = int(state.get("n_passes", 0))
+    try:
+        while True:
+            current_ids = discover_run_ids(args.history_root)
+            new_ids = current_ids - seen_run_ids
+            if len(new_ids) < args.watch_min_new_runs:
+                print(f"[watch] {len(new_ids)} new run folder(s), waiting for "
+                      f"{args.watch_min_new_runs}; next check in {args.watch_interval_s:g}s")
+                time.sleep(args.watch_interval_s)
+                continue
+
+            pass_idx += 1
+            pass_dir = output_dir / f"pass_{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
+            print(f"\n[watch] === pass {pass_idx}: {len(new_ids)} new run folder(s) -> {pass_dir} ===")
+
+            pass_args = copy.deepcopy(args)
+            pass_args.output_dir = str(pass_dir)
+            pass_args.lock_split = True
+            pass_args.split_lock_path = str(split_lock_path)
+            if not args.mlflow_run_name:
+                pass_args.mlflow_run_name = f"watch_pass_{pass_idx}"
+            if not user_init_from and promoted_path.exists():
+                pass_args.init_from = str(promoted_path)
+                print(f"[watch] warm-starting from the currently promoted checkpoint: {promoted_path}")
+
+            t0 = time.perf_counter()
+            try:
+                result = train_and_validate(pass_args)
+            except Exception as exc:
+                print(f"[watch] pass {pass_idx} FAILED: {exc}")
+                seen_run_ids |= new_ids
+                state["seen_run_ids"] = sorted(seen_run_ids)
+                save_watch_state(state_path, state)
+                time.sleep(args.watch_interval_s)
+                continue
+            seconds = time.perf_counter() - t0
+
+            seen_run_ids |= new_ids
+            metric = float(result["val_rollout_mae"])
+            prior_metric = state.get("promoted_metric")
+            improved = prior_metric is None or metric <= float(prior_metric) - float(args.promote_min_improvement)
+
+            print(f"[watch] pass {pass_idx} took {format_hms(seconds)}")
+            if improved:
+                atomic_copy(result["checkpoint_path"], promoted_path)
+                state["promoted_metric"] = metric
+                state["promoted_at"] = datetime.now(timezone.utc).isoformat()
+                state["promoted_from_pass"] = str(pass_dir)
+                print(f"[watch] promoted: val_rollout_mae {prior_metric} -> {metric:.4f} -> {promoted_path}")
+            else:
+                print(f"[watch] not promoted: val_rollout_mae {metric:.4f} did not beat "
+                      f"{float(prior_metric):.4f} by --promote-min-improvement={args.promote_min_improvement:g}")
+
+            state["seen_run_ids"] = sorted(seen_run_ids)
+            state["n_passes"] = pass_idx
+            save_watch_state(state_path, state)
+
+            append_watch_history_row(history_csv, {
+                "pass": pass_idx,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "n_new_runs": len(new_ids),
+                "n_total_runs_seen": len(seen_run_ids),
+                "val_rollout_mae": metric,
+                "promoted": improved,
+                "best_epoch": result["best_epoch"],
+                "n_excluded_by_lock": len(result["excluded_by_lock"]),
+                "seconds": round(seconds, 1),
+                "pass_dir": str(pass_dir),
+            })
+
+            if args.watch_max_passes and pass_idx >= args.watch_max_passes:
+                print(f"[watch] reached --watch-max-passes={args.watch_max_passes}, stopping")
+                return
+
+            time.sleep(args.watch_interval_s)
+    except KeyboardInterrupt:
+        print(f"\n[watch] interrupted after {pass_idx} pass(es); "
+              f"promoted checkpoint (if any) is unaffected: {promoted_path}")
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+    if args.watch:
+        run_watch_loop(args)
+    else:
+        train_and_validate(args)
+
+>>>>>>> Stashed changes
 
 if __name__ == "__main__":
     main()
