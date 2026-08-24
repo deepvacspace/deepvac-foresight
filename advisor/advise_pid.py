@@ -17,8 +17,8 @@ Defaults to the ~24 -> 0 problem (experiments/run_history's baseline); override
 
 Examples:
 
-    python -m gru.advise_pid --mode suggest --checkpoint gru/validation_rollout/promoted.pt
-    python -m gru.advise_pid --mode adapt   --checkpoint gru/validation_rollout/promoted.pt \
+    python -m advisor.advise_pid --mode suggest --checkpoint gru/validation_rollout/promoted.pt
+    python -m advisor.advise_pid --mode adapt   --checkpoint gru/validation_rollout/promoted.pt \
         --duration-s 1200 --mpc-horizon-s 80 --mpc-hold-s 20
 """
 
@@ -54,7 +54,7 @@ from deepvac.pid import pid_bounds  # noqa: E402
 from gru.gru_common import ChamberPID, CodesysDiff, load_model, predict_delta_t1  # noqa: E402
 from gru.twin_acceptance import describe_trajectory, warm_start_at  # noqa: E402
 
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "advisor"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "runs"
 
 
 def add_cost_args(ap: argparse.ArgumentParser) -> None:

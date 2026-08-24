@@ -32,8 +32,6 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "diagnose-codesys": ("gru.diagnose_codesys", "Validate GRU replay-control + CODESYS PID reconstruction."),
     "twin-acceptance": ("gru.twin_acceptance", "Score a GRU checkpoint as a whole-run digital twin, live or offline."),
     "predict-run": ("gru.predict_run", "Predict a whole-run trajectory for a candidate PID, no chamber run needed."),
-    "advise-pid": ("gru.advise_pid", "Suggest a PID triplet or adaptively control it via CEM search over the twin."),
-    "train-cost-surrogate": ("gru.train_cost_surrogate", "Train a fast MLP to screen PID candidates before CEM."),
 
     # --- LSTM digital twin --------------------------------------------------
     "train-lstm": ("lstm.train_lstm", "Train/validate/tune/test the one-step LSTM plant model."),
@@ -41,6 +39,10 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "mpc-lstm": ("lstm.mpc_lstm", "Continuous LSTM + MPC PID scheduler (CEM/random shooting)."),
     "batch-mpc-lstm": ("lstm.batch_mpc_runs", "Batch LSTM + MPC runs across scenarios, compare results."),
     "train-lstm-legacy": ("lstm.lstm", "Older standalone LSTM pipeline, kept for comparison only."),
+
+    # --- AI advisor (advisor/) -----------------------------------------------
+    "advise-pid": ("advisor.advise_pid", "Suggest a PID triplet or adaptively control it via CEM search over the twin."),
+    "train-cost-surrogate": ("advisor.train_cost_surrogate", "Train a fast MLP to screen PID candidates before CEM."),
 
     # --- Bayesian optimization / AI advisor (optimization/) ----------------
     "optimize-training-loop": ("optimization.training_loop", "Closed-loop band-BO runner against the live chamber."),

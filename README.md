@@ -6,21 +6,6 @@ temperature/PID telemetry, searches for better PID gains with Gaussian-process
 Bayesian optimization, and trains GRU/LSTM neural "digital twins" for offline
 simulation and model-predictive PID selection.
 
-## ⚠️ Safety
-
-This toolkit can write PID coefficients directly to a real chamber controller
-over an **unauthenticated, unencrypted** TCP connection (`tcp/tcp_common.py`,
-targeted with `--tcp-host`/`--tcp-port`). There is no independent supervisory
-interlock, confirmation prompt, or emergency stop built into any of it.
-
-- These write PID values over TCP: `optimization/mpc_experiment.py`,
-  `gp_experiment.py`, `tocero_3band.py`, `tocero_5band.py`, `tocero_gp_mpc.py`,
-  `collect_runs.py`, `random_pid_tests.py`, `training_loop.py`.
-  `tocero_gp_mpc.py` and `collect_runs.py` accept `--dry-run` to exercise their
-  full schedule without writing.
-- Everything under `gru/`, `lstm/`, and `deepvac/mpc.py` runs offline against a
-  trained plant model.
-
 ## Architecture
 
 ```mermaid

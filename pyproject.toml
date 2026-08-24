@@ -29,6 +29,7 @@ training = [
   "matplotlib==3.10.7",
   "mlflow==3.10.1",
   "optuna==4.7.0",
+  "tensorboard==2.21.0",
 ]
 # Plotting/analysis scripts only, without torch/scikit-learn. See
 # requirements/visualization.lock.txt for exact pins.
@@ -57,7 +58,7 @@ all = [
 deepvac = "deepvac.cli:main"
 
 [tool.setuptools]
-packages = ["deepvac", "gru", "lstm", "optimization", "tcp"]
+packages = ["deepvac", "gru", "lstm", "optimization", "tcp", "advisor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -69,7 +70,7 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-src = ["deepvac", "gru", "lstm", "optimization", "tcp", "tests"]
+src = ["deepvac", "gru", "lstm", "optimization", "tcp", "advisor", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -80,3 +81,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 "gru/*.py" = ["E501"]
 "lstm/*.py" = ["E501"]
 "optimization/*.py" = ["E501"]
+"advisor/*.py" = ["E501"]
