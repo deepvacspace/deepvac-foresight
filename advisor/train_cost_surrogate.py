@@ -6,8 +6,8 @@ Predicts a candidate PID's rollout cost directly from a state
 
 1. Generate a labeled dataset: sample (temp, current_pid) states, score
    candidate PIDs per state via deepvac.mpc_batch.rollout_population and
-   gru.advise_pid.horizon_cost.
-2. Train a small MLP (gru/cost_surrogate.py) to regress cost, then report
+   advisor.advise_pid.horizon_cost.
+2. Train a small MLP (advisor/cost_surrogate.py) to regress cost, then report
    rank correlation and top-K% screening hit rate against true cost on
    held-out states.
 
@@ -19,11 +19,11 @@ trajectory via batched rollouts), or both mixed.
 weight_decay/huber_beta via Optuna, reusing one generated/loaded dataset.
 
 Scoped to one --target-temp and one horizon (--mpc-horizon-s/--dt-s), the
-same horizon gru/advise_pid.py must be run with.
+same horizon advisor/advise_pid.py must be run with.
 
 Example:
 
-    python -m gru.train_cost_surrogate --checkpoint gru/validation_rollout/gru_rollout.pt
+    python -m advisor.train_cost_surrogate --checkpoint gru/validation_rollout/gru_rollout.pt
 """
 
 from __future__ import annotations
@@ -48,12 +48,13 @@ from deepvac.mpc import add_common_mpc_args, sample_candidates_random
 from deepvac.mpc_batch import rollout_population
 from deepvac.pid import pid_bounds
 
-from gru.advise_pid import add_cost_args, build_initial_state, horizon_cost
-from gru.cost_surrogate import FEATURE_NAMES, CostSurrogateMLP
 from gru.gru_common import load_model
 from gru.twin_acceptance import rank_correlation
 
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "cost_surrogate"
+from advisor.advise_pid import add_cost_args, build_initial_state, horizon_cost
+from advisor.cost_surrogate import FEATURE_NAMES, CostSurrogateMLP
+
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "cost_surrogate_runs"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401
 
 
