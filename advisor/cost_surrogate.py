@@ -1,5 +1,5 @@
 """A small MLP that predicts CEM's rollout cost for a candidate PID directly
-from a state, without simulating the GRU twin step by step.
+from a state, without simulating the digital twin step by step.
 """
 
 from __future__ import annotations

@@ -6,8 +6,8 @@ it can be evaluated with the same harness or used as a PPO warm start.
 
 Example:
 
-    python -m advisor.train_policy_bc --checkpoint gru/validation_rollout/gru_rollout.pt \
-        --dataset gru/bc_dataset/cem_labels.npz --hidden-dim 128 --num-layers 3
+    python -m advisor.train_policy_bc --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt \
+        --dataset advisor/bc_dataset/cem_labels.npz --hidden-dim 128 --num-layers 3
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.datasets import set_seed  # noqa: E402
+from deepvac.datasets import set_seed  
 
-from gru.gru_common import load_model  # noqa: E402
+from digitaltwin.common import load_model
 
-from advisor.train_policy_ppo import OBS_DIM, ActorCritic, VecTwinEnv, evaluate_policy  # noqa: E402
-from advisor.train_policy_ppo import build_arg_parser as build_ppo_arg_parser  # noqa: E402
+from advisor.train_policy_ppo import OBS_DIM, ActorCritic, VecTwinEnv, evaluate_policy  
+from advisor.train_policy_ppo import build_arg_parser as build_ppo_arg_parser  
 
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "policy_bc"
 

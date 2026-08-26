@@ -1,5 +1,5 @@
-"""Integration smoke test for the GRU training pipeline
-(gru/train_gru.py, sharing deepvac/datasets.py with lstm/train_lstm.py).
+"""Integration smoke test for the digital-twin training pipeline
+(digitaltwin/train.py, shared by both --model-family gru and lstm).
 
 Trains a tiny model for 2 epochs on synthetic data and asserts the pipeline runs
 end to end, producing a loadable checkpoint and a validation report with finite
@@ -18,8 +18,8 @@ pytestmark = pytest.mark.slow
 
 
 def test_train_and_validate_produces_a_loadable_checkpoint(history_root: Path, tmp_path: Path):
-    from gru.gru_common import load_model
-    from gru.train_gru import build_arg_parser, train_and_validate
+    from digitaltwin.common import load_model
+    from digitaltwin.train import build_arg_parser, train_and_validate
 
     output_dir = tmp_path / "output"
     plots_dir = tmp_path / "plots"

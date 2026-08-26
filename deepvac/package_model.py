@@ -9,11 +9,11 @@ for what each output contains.
 
 Examples:
 
-    deepvac package-model --checkpoint gru/validation_t1/gru_t1.pt
+    deepvac package-model --checkpoint digitaltwin/gru/validation_t1/gru_t1.pt
 
-    deepvac package-model --latest gru/validation_t1
+    deepvac package-model --latest digitaltwin/gru/validation_t1
 
-    deepvac package-model --checkpoint lstm/validation_t1/lstm_t1.pt --model-type lstm \\
+    deepvac package-model --checkpoint digitaltwin/lstm/validation_t1/lstm_t1.pt --model-type lstm \\
         --output-dir D:\\path\\to\\packaging
 """
 

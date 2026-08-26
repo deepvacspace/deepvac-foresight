@@ -14,7 +14,7 @@ onnxruntime = pytest.importorskip("onnxruntime")
 
 pytestmark = pytest.mark.slow
 
-from tests.conftest import build_tiny_gru_checkpoint  # noqa: E402
+from tests.conftest import build_tiny_gru_checkpoint  
 
 
 def test_export_onnx_matches_pytorch_numerically(tmp_path: Path):

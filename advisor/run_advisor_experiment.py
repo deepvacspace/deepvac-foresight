@@ -6,16 +6,19 @@ The PPO policy re-decides the PID triplet every checkpoint's mpc_hold_s from liv
 TCP telemetry, writing to the chamber's currently-active gain-scheduled PID band.
 Each decision (elapsed_s, kp, ki, kd) is recorded.
 
-After the run, the recorded decisions are replayed through the GRU twin for an
+After the run, the recorded decisions are replayed through the digital twin for an
 "expected" trajectory, scored against the real one for twin accuracy; a CEM search
 over the whole run finds a single best-fixed PID triplet as a "baseline" trajectory.
 All three trajectories are plotted, and a report.json/console summary covers twin
 accuracy and advisor-vs-baseline cost/tail_mae/overshoot improvement.
 
+--gru-checkpoint accepts either family's checkpoint (the twin used is whichever
+family it's stamped with) despite the flag name.
+
 Examples:
 
     python -m advisor.run_advisor_experiment \\
-        --gru-checkpoint gru/validation_rollout/gru_rollout.pt \\
+        --gru-checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt \\
         --ppo-checkpoint advisor/policy_ppo_v5/policy.pt \\
         --target-temp 0 --duration-s 1200
 
@@ -40,19 +43,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import make_run_id  # noqa: E402
-from deepvac.metrics import append_mae_column  # noqa: E402
-from deepvac.mpc import make_feature_row, optimize_pid_for_state, rollout_constant_pid, run_pid_substeps  # noqa: E402
-from deepvac.pid import clip_pid, pid_bounds  # noqa: E402
+from deepvac.artifacts import make_run_id  
+from deepvac.metrics import append_mae_column  
+from deepvac.mpc import make_feature_row, optimize_pid_for_state, rollout_constant_pid, run_pid_substeps
+from deepvac.pid import clip_pid, pid_bounds  
 
-from gru.gru_common import ChamberPID, CodesysDiff, load_model, predict_delta_t1  # noqa: E402
-from gru.twin_acceptance import compare_trajectories, describe_trajectory, simulate_twin, trajectory_cost  # noqa: E402
+from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
+from digitaltwin.twin_acceptance import compare_trajectories, describe_trajectory, simulate_twin, trajectory_cost
+from advisor.advise_pid import add_cost_args, build_initial_state, horizon_cost
+from advisor.train_policy_ppo import ActorCritic, DIFF_CLIP
+from deepvac.mpc import add_common_mpc_args
 
-from advisor.advise_pid import add_cost_args, build_initial_state, horizon_cost  # noqa: E402
-from advisor.train_policy_ppo import ActorCritic, DIFF_CLIP  # noqa: E402
-from deepvac.mpc import add_common_mpc_args  # noqa: E402
-
-from tcp.tcp_common import (  # noqa: E402
+from tcp.tcp_common import (  
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
@@ -75,7 +77,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     "then score it against the digital twin and a CEM baseline."
     )
 
-    ap.add_argument("--gru-checkpoint", required=True, help="Rollout-trained GRU checkpoint (the digital twin).")
+    ap.add_argument("--gru-checkpoint", required=True,
+                    help="Rollout-trained digital-twin checkpoint (GRU or LSTM, despite the flag name).")
     ap.add_argument("--ppo-checkpoint", required=True, help="Trained PPO policy (advisor/policy_ppo_*/policy.pt).")
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--session-name", default=None, help="Output subfolder name. Default: generated id.")

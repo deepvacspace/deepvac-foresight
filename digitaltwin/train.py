@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Train, validate, tune, and test a one-step GRU plant model from history."""
+"""Train, validate, tune, and test a one-step digital-twin plant model (GRU or
+LSTM, per --model-family) from history."""
 
 from __future__ import annotations
 from deepvac.datasets import (
@@ -18,7 +19,7 @@ from deepvac.datasets import (
     split_runs,
     summarize_metrics_by_run,
 )
-from gru.model import GRUModel, SequenceDataset
+from digitaltwin.model import MODEL_CLASSES, SequenceDataset
 
 import argparse
 import copy
@@ -37,23 +38,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-
+SCRIPT_DIR = Path(__file__).resolve().parent
 WORK_DIR = ROOT / "experiments"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_t1"
-DEFAULT_PLOTS_DIR = Path(__file__).resolve().parent / "plots_t1"
-DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Train, validate, tune, and test a one-step GRU plant model."
+        description="Train, validate, tune, and test a one-step digital-twin plant model."
     )
+    ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default="gru",
+                    help="Which recurrent architecture to train.")
     ap.add_argument("--history-root", default=str(DEFAULT_HISTORY_ROOT))
     ap.add_argument("--telemetry-names", nargs="+",
                     default=["run_samples.csv"])
-    ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    ap.add_argument("--plots-dir", default=str(DEFAULT_PLOTS_DIR))
+    ap.add_argument("--output-dir", default=None,
+                    help="Default: <script-dir>/<model-family>/validation_t1.")
+    ap.add_argument("--plots-dir", default=None,
+                    help="Default: <script-dir>/<model-family>/plots_t1.")
     ap.add_argument("--window-steps", type=int, default=60)
     ap.add_argument("--min-samples", type=int, default=100)
     ap.add_argument("--min-duration-s", type=float, default=300.0)
@@ -89,8 +91,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--optuna-timeout-s", type=float, default=None)
     ap.add_argument(
         "--experiment-name",
-        default="gru_t1",
-        help="Experiment name used for both MLflow and Optuna.",
+        default=None,
+        help="Experiment name used for both MLflow and Optuna. Default: <model-family>_t1.",
     )
     ap.add_argument(
         "--optuna-pruner",
@@ -108,7 +110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "MLflow tracking URI. Defaults to a local file store under "
-            f"{DEFAULT_MLFLOW_DIR}."
+            "<script-dir>/<model-family>/mlruns."
         ),
     )
     ap.add_argument(
@@ -128,6 +130,18 @@ def clone_args(
     return next_args
 
 
+def resolve_family_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill in --output-dir/--plots-dir/--experiment-name defaults that depend
+    on --model-family, once it's known post-parse."""
+    if args.output_dir is None:
+        args.output_dir = str(SCRIPT_DIR / args.model_family / "validation_t1")
+    if args.plots_dir is None:
+        args.plots_dir = str(SCRIPT_DIR / args.model_family / "plots_t1")
+    if args.experiment_name is None:
+        args.experiment_name = f"{args.model_family}_t1"
+    return args
+
+
 def setup_mlflow(args: argparse.Namespace):
     if args.no_mlflow:
         return None
@@ -140,7 +154,8 @@ def setup_mlflow(args: argparse.Namespace):
             "Install it with: pip install mlflow, or pass --no-mlflow."
         ) from exc
 
-    tracking_uri = args.mlflow_tracking_uri or DEFAULT_MLFLOW_DIR.resolve().as_uri()
+    default_mlflow_dir = SCRIPT_DIR / args.model_family / "mlruns"
+    tracking_uri = args.mlflow_tracking_uri or default_mlflow_dir.resolve().as_uri()
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(args.experiment_name)
     print(f"\nMLflow tracking URI: {tracking_uri}")
@@ -332,7 +347,7 @@ def train_model(
     train_loader, val_loader, _ = make_loaders(data, args)
     loss_fn = nn.SmoothL1Loss(beta=args.huber_beta)
 
-    model = GRUModel(
+    model = MODEL_CLASSES[args.model_family](
         input_dim=len(FEATURE_NAMES),
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
@@ -449,7 +464,7 @@ def train_model(
     if checkpoint_path is not None:
         checkpoint = {
             "model_state_dict": best_state_dict,
-            "model_family": "gru",
+            "model_family": args.model_family,
             "feature_names": FEATURE_NAMES,
             "input_dim": len(FEATURE_NAMES),
             "output_dim": 1,
@@ -601,7 +616,7 @@ def evaluate_best_model(
 
     checkpoint = torch.load(
         checkpoint_path, map_location=device, weights_only=False)
-    best_model = GRUModel(
+    best_model = MODEL_CLASSES[checkpoint.get("model_family", args.model_family)](
         input_dim=checkpoint["input_dim"],
         hidden_dim=checkpoint["hidden_dim"],
         num_layers=checkpoint["num_layers"],
@@ -658,6 +673,7 @@ def evaluate_best_model(
         "best_val_loss": float(checkpoint["best_val_loss"]),
         "best_val_mae_delta_t1": float(checkpoint["best_val_mae_delta_t1"]),
         "best_model_path": str(checkpoint_path),
+        "model_family": args.model_family,
         "target": "temp(t+1 row) - temp(t)",
         "final_metrics": final_metrics,
         "test_metrics": test_metrics,
@@ -718,12 +734,12 @@ def train_and_validate(args: argparse.Namespace) -> None:
 
     try:
         if mlflow is not None:
-            mlflow.set_tag("model_family", "gru")
+            mlflow.set_tag("model_family", args.model_family)
             mlflow.set_tag("target", "temp(t+1 row) - temp(t)")
             mlflow.set_tag("phase", "train_validate_test")
             log_params_with_prefix(mlflow, vars(args))
 
-        print("=== GRU model ===")
+        print(f"=== {args.model_family.upper()} model ===")
         data = build_dataset(args)
         log_dataset_to_mlflow(mlflow, data)
 
@@ -764,7 +780,7 @@ def train_and_validate(args: argparse.Namespace) -> None:
             )
             log_params_with_prefix(mlflow, vars(final_args), prefix="final_")
 
-        best_checkpoint_path = output_dir / "gru_t1.pt"
+        best_checkpoint_path = output_dir / f"{args.model_family}_t1.pt"
         print("\n=== Training ===")
         set_seed(final_args.seed)
         result = train_model(
@@ -779,7 +795,10 @@ def train_and_validate(args: argparse.Namespace) -> None:
             output_dir / "training_history.csv", index=False
         )
         plot_training_history(
-            result["history_rows"], plots_dir / "training_mae_t1.png")
+            result["history_rows"],
+            plots_dir / "training_mae_t1.png",
+            title=f"One-step {args.model_family.upper()} Training Curve",
+        )
 
         final_report = evaluate_best_model(
             final_args, data, device, best_checkpoint_path)
@@ -806,7 +825,7 @@ def train_and_validate(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = build_arg_parser().parse_args()
+    args = resolve_family_defaults(build_arg_parser().parse_args())
     train_and_validate(args)
 
 

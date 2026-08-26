@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Measure how well a trained GRU checkpoint acts as a digital twin.
+"""Measure how well a trained digital-twin checkpoint (GRU or LSTM) acts as a
+digital twin.
 
     --mode replay    Re-simulate whole logged runs closed-loop and compare against
                      what the chamber actually did. No hardware needed. Beyond
@@ -19,11 +20,16 @@
                      the real chamber over TCP with the same PID triplet held for
                      the entire run, then compare. One triplet per experiment.
 
+--model-family only picks the default --checkpoint when --checkpoint isn't
+passed explicitly; the model actually used is always whichever family the
+checkpoint itself is stamped with.
+
 Examples:
 
-    python -m gru.twin_acceptance --mode replay --max-runs 40
-    python -m gru.twin_acceptance --mode horizon --max-runs 40
-    python -m gru.twin_acceptance --mode chamber --num-tests 6 --pid-sets "6,997,16;10,500,20"
+    python -m digitaltwin.twin_acceptance --mode replay --max-runs 40
+    python -m digitaltwin.twin_acceptance --mode horizon --max-runs 40
+    python -m digitaltwin.twin_acceptance --model-family lstm --mode chamber \
+        --num-tests 6 --pid-sets "6,997,16;10,500,20"
 """
 
 from __future__ import annotations
@@ -44,11 +50,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import torch  # noqa: E402
-from deepvac.artifacts import append_row_csv, append_rows_csv, history_run_file, make_run_id  # noqa: E402
-from deepvac.metrics import append_mae_column, compute_tail_cost  # noqa: E402
-from deepvac.mpc import SimState, make_feature_row, run_pid_substeps, step_state  # noqa: E402
-from tcp.tcp_common import (  # noqa: E402
+import torch  
+from deepvac.artifacts import append_row_csv, append_rows_csv, history_run_file, make_run_id  
+from deepvac.metrics import append_mae_column, compute_tail_cost  
+from deepvac.mpc import SimState, make_feature_row, run_pid_substeps, step_state  
+from tcp.tcp_common import (  
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
@@ -57,23 +63,27 @@ from tcp.tcp_common import (  # noqa: E402
     request_temperature_states,
 )
 
-from gru.gru_common import ChamberPID, CodesysDiff, load_model, predict_delta_t1  # noqa: E402
+from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
+from digitaltwin.model import MODEL_CLASSES
 
-DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "gru_t1.pt"
+SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_HISTORY_ROOT = ROOT / "experiments" / "run_history"
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "twin_acceptance"
 
 DEFAULT_PID_SETS = "6,997,16;10,500,20;15,750,10;20,200,40;4,900,8;12,300,25"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Score a GRU checkpoint as a whole-run digital twin of the chamber.",
+        description="Score a digital-twin checkpoint as a whole-run twin of the chamber.",
     )
 
     ap.add_argument("--mode", choices=["replay", "horizon", "chamber"], default="replay")
-    ap.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT))
-    ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default="gru",
+                    help="Only used to pick the default --checkpoint below.")
+    ap.add_argument("--checkpoint", default=None,
+                    help="Default: <script-dir>/<model-family>/validation_t1/<model-family>_t1.pt.")
+    ap.add_argument("--output-dir", default=None,
+                    help="Default: <script-dir>/<model-family>/twin_acceptance.")
     ap.add_argument("--session-name", default=None, help="Output subfolder name. Default: generated id.")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--cpu", action="store_true")
@@ -1138,6 +1148,13 @@ def print_summary(summary: dict[str, object], args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.checkpoint is None:
+        args.checkpoint = str(
+            SCRIPT_DIR / args.model_family / "validation_t1" / f"{args.model_family}_t1.pt"
+        )
+    if args.output_dir is None:
+        args.output_dir = str(SCRIPT_DIR / args.model_family / "twin_acceptance")
+
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

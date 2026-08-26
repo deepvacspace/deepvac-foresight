@@ -32,14 +32,15 @@ class ModelSpec:
 
 
 def _gru_spec() -> ModelSpec:
-    from gru.gru_common import GRUModel, load_model, predict_delta_t1
+    from digitaltwin.common import load_model, predict_delta_t1
+    from digitaltwin.model import GRUModel
 
     return ModelSpec(name="gru", load_model=load_model, predict_delta_t1=predict_delta_t1, plant_model_class=GRUModel)
 
 
 def _lstm_spec() -> ModelSpec:
-    from lstm.model import LSTMModel
-    from lstm.mpc_lstm import load_model, predict_delta_t1
+    from digitaltwin.common import load_model, predict_delta_t1
+    from digitaltwin.model import LSTMModel
 
     return ModelSpec(
         name="lstm", load_model=load_model, predict_delta_t1=predict_delta_t1, plant_model_class=LSTMModel

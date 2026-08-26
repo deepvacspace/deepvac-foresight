@@ -13,7 +13,7 @@ import argparse
 import numpy as np
 from deepvac import mpc
 from deepvac.schemas import DEFAULT_FEATURE_NAMES
-from gru.gru_common import ChamberPID, CodesysDiff
+from digitaltwin.common import ChamberPID, CodesysDiff
 
 
 def fake_predict_fn(model, checkpoint, feature_window, device):

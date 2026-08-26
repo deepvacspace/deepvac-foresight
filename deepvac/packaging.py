@@ -38,7 +38,7 @@ ModelType = str
 
 def _read_stamped_model_family(checkpoint_path: Path) -> ModelType | None:
     """Read checkpoint["model_family"] if present and registered, else None."""
-    from gru.gru_common import _ensure_sklearn_stub
+    from digitaltwin.common import _ensure_sklearn_stub
 
     _ensure_sklearn_stub()
     try:
@@ -215,7 +215,7 @@ def _source_of(obj) -> str:
 
 
 def _generate_shared_block(model_type: ModelType) -> str:
-    from gru import gru_common
+    from digitaltwin import common as twin_common
 
     from deepvac import mpc as _mpc
     from deepvac.schemas import DEFAULT_FEATURE_NAMES
@@ -270,7 +270,7 @@ def _generate_shared_block(model_type: ModelType) -> str:
         "Metrics = dict[str, float | int | bool | str]",
         "",
         "",
-        _source_of(gru_common._ensure_sklearn_stub),
+        _source_of(twin_common._ensure_sklearn_stub),
         "",
         'DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "model.pt"',
         "",
@@ -281,11 +281,11 @@ def _generate_shared_block(model_type: ModelType) -> str:
         "",
         f"PlantModel = {plant_model_name}",
         "",
-        _source_of(gru_common.limit),
+        _source_of(twin_common.limit),
         "",
-        _source_of(gru_common.CodesysDiff),
+        _source_of(twin_common.CodesysDiff),
         "",
-        _source_of(gru_common.ChamberPID),
+        _source_of(twin_common.ChamberPID),
         "",
         "",
         "def load_model(",
