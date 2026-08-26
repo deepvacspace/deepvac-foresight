@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Replay one gru/advise_pid.py session's PID choices against the real chamber
-over TCP, and log the outcome next to the advisor's own prediction.
+"""Replay one advisor/advise_pid.py session's PID choices against the real
+chamber over TCP, and log the outcome next to the advisor's own prediction.
 
---advisor-dir points at one advise_pid.py session folder, which holds report.json and, 
+--advisor-dir points at one advise_pid.py session folder, which holds report.json and,
 for --mode adapt runs, decisions.csv:
 
   --mode suggest sessions -> single recommended_pid is held for duration_s.
 
-  --mode adapt sessions -> PID triplets are replayed at the same elapsed-time offsets. 
+  --mode adapt sessions -> PID triplets are replayed at the same elapsed-time offsets.
     Only rows with changed=True reapply.
 
-python -m optimization.replay_advisor_decisions --advisor-dir gru/advisor/advise_adapt_1787145280_6da9899c
-python -m optimization.replay_advisor_decisions --advisor-dir gru/advisor/advise_suggest_1787136883_5d73fd26 --num-tests 3
+python -m optimization.replay_advisor_decisions --advisor-dir advisor/runs/advise_adapt_1787145280_6da9899c
+python -m optimization.replay_advisor_decisions --advisor-dir advisor/runs/advise_suggest_1787136883_5d73fd26 --num-tests 3
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
 
     ap.add_argument("--advisor-dir", required=True,
-                    help="A gru/advise_pid.py session folder (contains report.json, "
+                    help="An advisor/advise_pid.py session folder (contains report.json, "
                          "and decisions.csv for --mode adapt sessions).")
     ap.add_argument("--decisions-csv", default=None,
                     help="Override for {advisor-dir}/decisions.csv.")
