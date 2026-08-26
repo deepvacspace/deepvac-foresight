@@ -1,7 +1,7 @@
-"""Integration tests for the checkpoint contract shared by gru/gru_common.py,
-gru/mpc_gru.py, lstm/mpc_lstm.py, and deepvac/packaging.py's ONNX export --
-the torch.save() dict shape documented in DEV_GUIDE.md §6 (model_state_dict,
-x_scaler/y_scaler, feature_names, window_steps)."""
+"""Integration tests for the checkpoint contract shared by digitaltwin/common.py,
+deepvac/mpc.py, and deepvac/packaging.py's ONNX export -- the torch.save() dict
+shape documented in DEV_GUIDE.md §6 (model_state_dict, x_scaler/y_scaler,
+feature_names, window_steps)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from tests.conftest import build_tiny_gru_checkpoint
 
 
 def test_load_model_round_trips_a_checkpoint(tmp_path: Path):
-    from gru.gru_common import load_model
+    from digitaltwin.common import load_model
 
     path = build_tiny_gru_checkpoint(tmp_path / "ckpt.pt")
     model, checkpoint = load_model(path, torch.device("cpu"))
@@ -26,7 +26,7 @@ def test_load_model_round_trips_a_checkpoint(tmp_path: Path):
 
 
 def test_predict_delta_t1_is_deterministic_across_reloads(tmp_path: Path):
-    from gru.gru_common import load_model, predict_delta_t1
+    from digitaltwin.common import load_model, predict_delta_t1
 
     path = build_tiny_gru_checkpoint(tmp_path / "ckpt.pt")
     device = torch.device("cpu")
@@ -46,7 +46,7 @@ def test_predict_delta_t1_reacts_to_scaler_not_just_weights(tmp_path: Path):
     """Two checkpoints with identical weights but different y_scaler stats
     must produce different real-unit predictions -- catches a regression
     where predict_delta_t1 stops applying inverse_transform."""
-    from gru.gru_common import load_model, predict_delta_t1
+    from digitaltwin.common import load_model, predict_delta_t1
 
     path_a = build_tiny_gru_checkpoint(tmp_path / "a.pt", seed=1)
     path_b = build_tiny_gru_checkpoint(tmp_path / "b.pt", seed=1)

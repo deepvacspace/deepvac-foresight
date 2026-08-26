@@ -52,11 +52,6 @@ PIDTriplet = Tuple[int, int, int]
 Leg = Tuple[float, float, Optional[PIDTriplet]]     # (target_temp, duration_s, pid_override)
 Profile = List[Leg]
 
-# Every historical run's far/mid/near gains were identical, so this is that same
-# pool of 64 proven triplets flattened to one value each -- see the module
-# docstring point 1. These were tuned/observed only within roughly the 25 -> 0
-# band; behavior at the far ends of --temp-ref-min/--temp-ref-max is exactly what
-# this script is collecting evidence about, not something already known-good.
 PID_POOL: List[PIDTriplet] = [
     (15, 1000, 0), (10, 750, 10), (10, 500, 40), (20, 750, 10), (20, 750, 40), (20, 750, 20),
     (15, 200, 20), (15, 750, 10), (10, 200, 20), (20, 1000, 10), (20, 200, 20), (15, 200, 10),
@@ -94,10 +89,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # --- Temperature range and profile generation ---------------------------------
     # Every profile is a fixed 3 legs after the anchor. Leg 1's target is drawn
-    # structurally (grid or a commanded step from the anchor) for systematic
-    # temperature/step-size coverage; legs 2 and 3 are uniformly random, so every
-    # profile also exercises at least two direction changes while already
-    # mid-transition. See build_profiles() and the module-end notes.
+    # structurally; legs 2 and 3 are uniformly random
     ap.add_argument("--temp-ref-min", type=float, default=-22.0)
     ap.add_argument("--temp-ref-max", type=float, default=30.0)
     ap.add_argument("--sweep-points", type=int, default=9,
@@ -151,10 +143,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-consecutive-failures", type=int, default=10)
 
     # --- Output ------------------------------------------------------------------------
-    # Anchored to this file's own directory, not a bare relative string, so
-    # `python -m optimization.tocero_temp_transitions` from the repo root (the
-    # form this module's own docstring recommends) still lands next to
-    # run_history/ and heatup_run_history/ instead of at the repo root.
     ap.add_argument("--history-root", default=str(Path(__file__).with_name("temp_sweep_history")),
                     help="Kept separate from run_history/heatup_run_history so the existing "
                          "25 -> 0 baseline stays uncontaminated; combine roots at training time.")
@@ -198,17 +186,10 @@ def draw_leg_pid(args: argparse.Namespace, rng: random.Random) -> Optional[PIDTr
 
 
 def build_profiles(args: argparse.Namespace, rng: random.Random) -> List[Profile]:
-    """The pool of post-anchor leg sequences a run can be assigned, cycled by run
+    """The pool of leg sequences a run can be assigned, cycled by run
     index the same way PID_POOL is.
 
-    Every profile is exactly 3 legs: anchor -> leg1 -> leg2 -> leg3. Leg 1's target
-    is drawn structurally -- an even grid spanning the full range, or a commanded
-    step of a given size from the anchor -- so temperature and step-size coverage
-    stay systematic. Legs 2 and 3 are drawn uniformly at random, so every profile
-    also exercises at least two direction changes while already mid-transition: the
-    case MPC replanning produces constantly and which no existing run contains at
-    all, not just a single isolated step. Under --pid-per-leg each leg also draws
-    its own PID, so the gains and the setpoint can change together mid-run.
+    Every profile is exactly 3 legs: anchor -> leg1 -> leg2 -> leg3. 
     """
     lo, hi = float(args.temp_ref_min), float(args.temp_ref_max)
     span = hi - lo
@@ -429,10 +410,6 @@ def run_single_test(
         "start_temp": start_temp,
         "temp_ref": final_target,
         "pid_source": pid_source,
-        # far_/mid_/near_ columns kept identical (== the run's default triplet) so
-        # read_band_table() in gru/train_gru_rollout.py stays compatible unchanged.
-        # Under --pid-per-leg individual legs can use a different triplet -- see
-        # temp_ref_events.csv's kp/ki/kd columns for the full per-leg history.
         "far_kp": int(kp), "far_ki": int(ki), "far_kd": int(kd),
         "mid_kp": int(kp), "mid_ki": int(ki), "mid_kd": int(kd),
         "near_kp": int(kp), "near_ki": int(ki), "near_kd": int(kd),
@@ -526,80 +503,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# -----------------------------------------------------------------------------
-# Methodology notes
-# -----------------------------------------------------------------------------
-#
-# What this collects that the existing history does not
-#
-#   optimization/run_history/       299 runs, every one 25 -> 0.0 deg C.
-#   optimization/heatup_run_history/ 62 runs, 0 -> 25 and 25 -> 0, but as two
-#                                    separate logged experiments per cycle.
-#
-# Neither contains a temperature outside roughly [-9, 37] deg C, and neither
-# contains a run where the setpoint changes partway through -- see the earlier
-# measurement in this project (gru/train_gru_rollout.py's docstring / the digital
-# twin discussion): every training rollout has always seen exactly one target for
-# its whole length. A twin trained only on that generalizes to new targets and to
-# setpoint changes purely by extrapolation, which is unverified by anything in the
-# data. This script targets both gaps directly, in one continuously logged run
-# rather than split experiments, so the model sees the transition itself:
-#
-#   - Leg 1's target (grid or a commanded step from the anchor) teaches both "what
-#     temperature X looks like" outside the narrow band the model has so far only
-#     interpolated within, and "what a commanded step looks like": the P/I/D terms
-#     jump, the temperature curve bends, at a magnitude and direction the model has
-#     not seen mid-run before.
-#   - Legs 2 and 3, drawn at random, teach recovery from a step while still
-#     mid-transition -- exactly what MPC replanning produces on every hold
-#     interval once an advisor is driving PID choices, and the case a model
-#     trained only on undisturbed single-target cooldowns is least prepared for.
-#
-# Why this and not a bigger tocero_3band.py-style random/BO PID search
-#
-# tocero_3band.py's job is finding good PID gains for a target that is already
-# fixed at 0 deg C. This script's job is teaching the plant model itself, so PID
-# defaults to one triplet per run from PID_POOL (or --random-pid) rather than
-# being another search axis -- crossing temperature diversity with PID diversity
-# multiplies the runs needed for the same coverage, and PID quality at other
-# targets is a separate question from whether the model can predict the outcome
-# at all.
-#
-# --pid-per-leg is the one place this project deliberately crosses both axes: a
-# real advisor's replanning changes the setpoint and the gains at the same time,
-# mid-transition, and nothing in the data captures that combination without it.
-# Run it as a separate, smaller batch rather than the default -- it is a genuinely
-# different (and harder to interpret) regime, not a superset of the single-PID
-# runs.
-#
-# Safety
-#
-# PID_POOL was chosen for the 25 -> 0 band. At the far ends of the configured
-# range that has not been validated, and a triplet that looks fine near 0 deg C
-# is not guaranteed to behave the same at -22 or 30. --safety-margin-c aborts the
-# current leg (not the whole run) if temp strays past [temp-ref-min, temp-ref-max]
-# by more than that margin; the default of 5 deg C is a starting point, not a
-# guarantee. Run a short --num-tests batch under supervision before leaving
-# --forever unattended, and lower --safety-margin-c if the chamber's actual
-# tolerances call for it.
-#
-# Using the data
-#
-# The result lands in --history-root (temp_sweep_history/ by default, kept apart
-# from run_history/ and heatup_run_history/ deliberately) in the same
-# run_samples.csv/run_summary.csv layout those use, so gru/train_gru_rollout.py's
-# --history-root can take this directory alongside the others -- it accepts more
-# than one root and pools the runs (find_run_csvs is one level deep, not
-# recursive, so a shared parent directory would not work):
-#
-#   python -m gru.train_gru_rollout \
-#       --history-root optimization/run_history optimization/heatup_run_history \
-#                       optimization/temp_sweep_history ...
-#
-# Expect the model to get worse on held-out 25 -> 0 runs before it gets better
-# everywhere -- it is being asked to fit a much wider distribution than before --
-# so re-run gru/twin_acceptance.py --mode replay/horizon on both distributions
-# once enough
-# runs have accumulated, not just on the historical 25 -> 0 set.

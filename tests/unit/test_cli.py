@@ -14,7 +14,8 @@ def test_every_command_module_is_importable():
     catches a typo'd module path before it ships as a broken subcommand."""
     import importlib
 
-    for module_name, _description in cli.COMMANDS.values():
+    for entry in cli.COMMANDS.values():
+        module_name = entry[0]
         importlib.import_module(module_name)
 
 

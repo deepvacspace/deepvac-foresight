@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AI advisor: recommend PID gains for a temperature setpoint using the trained
-GRU plant model as a simulator, with CEM/random-shooting search over it.
+digital-twin plant model (GRU or LSTM) as a simulator, with CEM/random-shooting
+search over it.
 
     --mode suggest   One CEM search over the whole intended run. Returns a
                      triplet and its predicted whole-run outcome. Seeded cold by
@@ -9,16 +10,17 @@ GRU plant model as a simulator, with CEM/random-shooting search over it.
     --mode adapt     Receding-horizon control: replans on a short --mpc-horizon-s
                      every --mpc-hold-s, for the whole --duration-s.
 
-Point --checkpoint at a rollout-trained checkpoint (gru/train_gru_rollout.py's
-output), not the plain one-step gru_t1.pt.
+Point --checkpoint at a rollout-trained checkpoint (digitaltwin/train_rollout.py's
+output), not the plain one-step {gru,lstm}_t1.pt. The twin family used is
+whichever the checkpoint itself is stamped with.
 
 Defaults to the ~24 -> 0 problem (experiments/run_history's baseline); override
 --start-temp/--target-temp for anything else the twin has data for.
 
 Examples:
 
-    python -m advisor.advise_pid --mode suggest --checkpoint gru/validation_rollout/promoted.pt
-    python -m advisor.advise_pid --mode adapt   --checkpoint gru/validation_rollout/promoted.pt \
+    python -m advisor.advise_pid --mode suggest --checkpoint digitaltwin/gru/validation_rollout/promoted.pt
+    python -m advisor.advise_pid --mode adapt   --checkpoint digitaltwin/gru/validation_rollout/promoted.pt \
         --duration-s 1200 --mpc-horizon-s 80 --mpc-hold-s 20
 """
 
@@ -38,9 +40,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import make_run_id  # noqa: E402
-from deepvac.datasets import prepare_run_dataframe  # noqa: E402
-from deepvac.mpc import (  # noqa: E402
+from deepvac.artifacts import make_run_id  
+from deepvac.datasets import prepare_run_dataframe  
+from deepvac.mpc import (  
     SimState,
     add_common_mpc_args,
     initialize_feature_window,
@@ -49,10 +51,10 @@ from deepvac.mpc import (  # noqa: E402
     rollout_constant_pid,
     run_mpc_simulation,
 )
-from deepvac.pid import pid_bounds  # noqa: E402
+from deepvac.pid import pid_bounds  
 
-from gru.gru_common import ChamberPID, CodesysDiff, load_model, predict_delta_t1  # noqa: E402
-from gru.twin_acceptance import describe_trajectory, warm_start_at  # noqa: E402
+from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
+from digitaltwin.twin_acceptance import describe_trajectory, warm_start_at
 
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "runs"
 
@@ -129,12 +131,12 @@ def horizon_cost(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="AI advisor: recommend or continuously adapt PID gains via CEM search over the GRU twin."
+        description="AI advisor: recommend or continuously adapt PID gains via CEM search over the digital twin."
     )
 
     ap.add_argument("--mode", choices=["suggest", "adapt"], default="suggest")
     ap.add_argument("--checkpoint", required=True,
-                    help="A rollout-trained checkpoint (gru/train_gru_rollout.py's output).")
+                    help="A rollout-trained checkpoint (digitaltwin/train_rollout.py's output).")
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--session-name", default=None, help="Output subfolder name. Default: generated id.")
     ap.add_argument("--no-plot", action="store_true")

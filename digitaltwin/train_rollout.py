@@ -1,35 +1,28 @@
 #!/usr/bin/env python3
-"""Train the LSTM plant model on multi-step rollouts instead of single steps.
+"""Train the digital-twin plant model (GRU or LSTM, per --model-family) on
+multi-step rollouts instead of single steps.
 
-The loss is computed over an N-step unrolled rollout with gradients flowing through
-the unroll, feeding the temperature back from the model's own prediction and
-simulating the PID/diff controller in-graph as deepvac.mpc.step_state does at
-inference. Early stopping and checkpointing select on free-running rollout MAE over
-held-out runs. --split-by pid-config assigns whole clusters of near-duplicate PID
-configurations to one split.
+Loss is computed over an N-step unrolled rollout, feeding the predicted temperature
+back in and simulating the PID/diff controller in-graph. Early stopping and
+checkpointing select on free-running rollout MAE over held-out runs.
 
-The checkpoint layout matches lstm/train_lstm.py, so the result is a drop-in
-replacement in mpc_lstm.py, mpc_batch.py, and simulate_lstm.py.
+The checkpoint layout matches digitaltwin/train.py's, so the result is a drop-in
+replacement wherever that checkpoint is consumed (MPC, twin_acceptance.py,
+package-model).
 
---watch turns this into a long-running companion to whatever is collecting chamber
-runs (tocero_3band.py, band_bo_gp.py, ...): it polls --history-root, and once enough
-runs are new it retrains -- warm-started from the last checkpoint it promoted -- and
-promotes the result only if it beats that checkpoint on a validation split that is
-locked the first time it is computed and reused on every later pass, so "improved"
-means the same thing across the whole run. Checkpoint writes are atomic, so whatever
-is reading --promoted-checkpoint (twin_acceptance.py, MPC, a control app) never sees
-a half-written file.
+--watch polls --history-root and retrains, warm-started from the last promoted
+checkpoint, whenever enough new runs appear.
 
 Examples:
 
     # One-shot, fine-tuning an existing 1-step checkpoint with a 100-step rollout loss.
-    python -m lstm.train_lstm_rollout \
-        --init-from lstm/validation_t1/lstm_t1.pt \
+    python -m digitaltwin.train_rollout --model-family gru \
+        --init-from digitaltwin/gru/validation_t1/gru_t1.pt \
         --rollout-steps 100 --epochs 40 --split-by pid-config
 
     # Left running alongside an optimizer script collecting new chamber runs.
-    python -m lstm.train_lstm_rollout \
-        --init-from lstm/validation_t1/lstm_t1.pt --rollout-steps 100 \
+    python -m digitaltwin.train_rollout --model-family lstm \
+        --init-from digitaltwin/lstm/validation_t1/lstm_t1.pt --rollout-steps 100 \
         --watch --watch-min-new-runs 5 --watch-interval-s 300
 """
 
@@ -51,8 +44,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-
-# Bound before lstm_common can install its sklearn stub, which torch's tracer rejects.
 import sklearn.preprocessing  # noqa: F401,E402
 import torch
 import torch.nn as nn
@@ -61,7 +52,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.datasets import (  # noqa: E402
+from deepvac.datasets import (
     FEATURE_NAMES,
     build_sequences,
     find_run_csvs,
@@ -69,15 +60,13 @@ from deepvac.datasets import (  # noqa: E402
     set_seed,
 )
 
-from lstm.model import LSTMModel  # noqa: E402
+from digitaltwin.model import MODEL_CLASSES
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 WORK_DIR = ROOT / "experiments"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "validation_rollout"
-# Shared with lstm/train_lstm.py's default MLflow tracking store.
-DEFAULT_MLFLOW_DIR = Path(__file__).resolve().parent / "mlruns"
 
-# lstm_common.CodesysDiff / ChamberPID constants.
+# digitaltwin.common.CodesysDiff / ChamberPID constants.
 DIFF_DC = 0.995
 DIFF_CLIP = 5.0
 DIFF_GAIN = 10.0
@@ -86,16 +75,17 @@ D_PART_CLIP = 0.4
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Train a LSTM plant model on multi-step rollouts, selected on rollout error.",
+        description="Train a digital-twin plant model on multi-step rollouts, selected on rollout error.",
     )
 
+    ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default=None,
+                    help="Which recurrent architecture to train. Default: the family stamped "
+                         "in --init-from's checkpoint when that flag is given, else gru.")
     ap.add_argument("--history-root", nargs="+", default=[str(DEFAULT_HISTORY_ROOT)],
-                    help="One or more run-history roots; runs from all of them are pooled "
-                         "together. find_run_csvs() is one level deep, not recursive, so this "
-                         "is how to combine e.g. run_history/ and heatup_run_history/ -- "
-                         "pointing at their shared parent directory finds nothing.")
+                    help="One or more run-history roots; runs from all of them are pooled together.")
     ap.add_argument("--telemetry-names", nargs="+", default=["run_samples.csv"])
-    ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    ap.add_argument("--output-dir", default=None,
+                    help="Default: <script-dir>/<model-family>/validation_rollout.")
     ap.add_argument("--window-steps", type=int, default=60)
     ap.add_argument("--min-samples", type=int, default=100)
     ap.add_argument("--min-duration-s", type=float, default=300.0)
@@ -127,10 +117,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--config-cluster-eps",
         type=float,
         default=0.12,
-        help=(
-            "Single-linkage radius merging near-duplicate band tables, in a log-scaled "
-            "normalized gain space of diameter 3.0. 0 merges exact matches only."
-        ),
+        help="Single-linkage radius for merging near-duplicate band tables. 0 merges exact matches only.",
     )
     ap.add_argument("--train-fraction", type=float, default=0.80)
     ap.add_argument("--val-fraction", type=float, default=0.10)
@@ -193,8 +180,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--layer-norm",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Use a LayerNorm-LSTM (normalizes each gate's pre-activation every step) "
-             "instead of plain nn.LSTM. Trains slower step-for-step (no cuDNN fused kernel).",
+        help="Use a LayerNorm-normalized recurrent cell instead of plain nn.GRU/nn.LSTM. "
+             "Trains slower step-for-step (no cuDNN fused kernel).",
     )
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=40)
@@ -205,7 +192,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--huber-beta", type=float, default=0.134)
     ap.add_argument("--cpu", action="store_true")
 
-    ap.add_argument("--checkpoint-name", default="lstm_rollout.pt")
+    ap.add_argument("--checkpoint-name", default=None,
+                    help="Default: <model-family>_rollout.pt.")
     ap.add_argument("--report-name", default="rollout_report.json")
 
     # --- Optuna hyperparameter search --------------------------------------------
@@ -213,16 +201,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--optuna-trials",
         type=int,
         default=0,
-        help="Run this many Optuna trials over model/optimization hyperparameters "
-             "before the final training pass, selecting on val_rollout_mae. 0 disables "
-             "search and trains once with the CLI hyperparameters as given. Searches "
-             "--hidden-dim, --num-layers, --dropout, --layer-norm, --batch-size, --lr, "
-             "--weight-decay, --grad-clip, --huber-beta, --bias-weight, --tbptt-steps; "
-             "architecture stays fixed to --init-from's when that is set.",
+        help="Run this many Optuna trials over model/optimization hyperparameters before the "
+             "final training pass, selecting on val_rollout_mae. 0 disables search.",
     )
     ap.add_argument("--optuna-epochs", type=int, default=15,
-                    help="Max epochs per Optuna trial. Kept low by default since rollout "
-                         "epochs are expensive; the final pass still trains for --epochs.")
+                    help="Max epochs per Optuna trial; the final pass still trains for --epochs.")
     ap.add_argument("--optuna-timeout-s", type=float, default=None,
                     help="Stop starting new trials after this many seconds. Default: no timeout.")
     ap.add_argument(
@@ -238,13 +221,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # --- MLflow experiment tracking -----------------------------------------------
     ap.add_argument(
         "--experiment-name",
-        default="lstm_rollout",
-        help="Experiment name used for both MLflow and the Optuna study.",
+        default=None,
+        help="Experiment name used for both MLflow and the Optuna study. "
+             "Default: <model-family>_rollout.",
     )
     ap.add_argument("--no-mlflow", action="store_true",
                     help="Disable MLflow experiment tracking.")
     ap.add_argument("--mlflow-tracking-uri", default=None,
-                    help=f"MLflow tracking URI. Default: a local file store under {DEFAULT_MLFLOW_DIR}.")
+                    help="MLflow tracking URI. Default: a local file store under "
+                         "<script-dir>/<model-family>/mlruns.")
     ap.add_argument("--mlflow-run-name", default=None,
                     help="Optional MLflow run name for the parent run. --watch names each pass's "
                          "run automatically when this is left unset.")
@@ -254,12 +239,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--lock-split",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help=(
-            "Compute the val/test split once and reuse it on every later run so "
-            "'improved' is comparable across them. New runs since the lock become "
-            "training data; new runs that now cluster with a locked val/test run are "
-            "excluded rather than risking leakage. Default: on for --watch, off otherwise."
-        ),
+        help="Compute the val/test split once and reuse it on every later run. "
+             "Default: on for --watch, off otherwise.",
     )
     ap.add_argument("--split-lock-path", default=None,
                     help="Where the locked split is stored. Default: --output-dir/split_lock.json.")
@@ -324,6 +305,27 @@ def clone_args(args: argparse.Namespace, updates: dict[str, object] | None = Non
     return next_args
 
 
+def resolve_family_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill in --model-family (from --init-from's stamp when not passed explicitly)
+    and the --output-dir/--checkpoint-name/--experiment-name defaults that depend
+    on it, once it's known post-parse."""
+    if args.model_family is None:
+        args.model_family = "gru"
+        if args.init_from:
+            from digitaltwin.common import _ensure_sklearn_stub
+
+            _ensure_sklearn_stub()
+            init_checkpoint = torch.load(Path(args.init_from), map_location="cpu", weights_only=False)
+            args.model_family = init_checkpoint.get("model_family", "gru")
+    if args.output_dir is None:
+        args.output_dir = str(SCRIPT_DIR / args.model_family / "validation_rollout")
+    if args.checkpoint_name is None:
+        args.checkpoint_name = f"{args.model_family}_rollout.pt"
+    if args.experiment_name is None:
+        args.experiment_name = f"{args.model_family}_rollout"
+    return args
+
+
 def setup_mlflow(args: argparse.Namespace):
     if args.no_mlflow:
         return None
@@ -336,7 +338,8 @@ def setup_mlflow(args: argparse.Namespace):
             "Install it with: pip install mlflow, or pass --no-mlflow."
         ) from exc
 
-    tracking_uri = args.mlflow_tracking_uri or DEFAULT_MLFLOW_DIR.resolve().as_uri()
+    default_mlflow_dir = SCRIPT_DIR / args.model_family / "mlruns"
+    tracking_uri = args.mlflow_tracking_uri or default_mlflow_dir.resolve().as_uri()
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(args.experiment_name)
     print(f"[mlflow] tracking URI: {tracking_uri}")
@@ -369,7 +372,7 @@ def log_metrics_with_prefix(mlflow, metrics: dict[str, Any], prefix: str = "", s
 
 
 # -----------------------------------------------------------------------------
-# Differentiable controller (torch port of lstm_common.ChamberPID / CodesysDiff)
+# Differentiable controller (torch port of digitaltwin.common.ChamberPID / CodesysDiff)
 # -----------------------------------------------------------------------------
 
 
@@ -389,10 +392,7 @@ def torch_pid_substeps(
     u_max: float,
     i_reverse_mul: float,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold").
-    Mirrors deepvac.mpc_batch._vec_pid_step's safe-division guards for kp == 0
-    and effective_i == 0.
-    """
+    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold")."""
     u = u_p = u_d = torch.zeros_like(temp)
     zero = torch.zeros_like(temp)
     one = torch.ones_like(temp)
@@ -404,7 +404,6 @@ def torch_pid_substeps(
         diff_out = DIFF_GAIN * torch.clamp(diff_filter, -DIFF_CLIP, DIFF_CLIP)
 
         delta = temp_ref - temp
-        # The scalar/numpy controllers return 0 and leave state untouched when kp == 0.
         kp_live = kp != 0.0
         safe_kp = torch.where(kp_live, kp, one)
         inv_kp = 1.0 / safe_kp
@@ -439,11 +438,7 @@ def torch_pid_substeps(
 def invert_diff_filter(
     u_d_norm: np.ndarray, kp: np.ndarray, kd: np.ndarray
 ) -> np.ndarray:
-    """Recover CodesysDiff's filter state from a logged D term.
-
-    Inverts u_d = (1/kp) * (kd * -DIFF_GAIN * clamp(diff_filter)). Approximate where
-    u_d sits on its +-D_PART_CLIP rail.
-    """
+    """Recover CodesysDiff's filter state from a logged D term."""
     kp = np.asarray(kp, dtype=np.float64)
     kd = np.asarray(kd, dtype=np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -506,12 +501,7 @@ def unroll(
     feature_index: dict[str, int],
     horizon: int,
 ) -> torch.Tensor:
-    """Free-running rollout. Returns predicted temperatures, shape (B, horizon).
-
-    Follows deepvac.mpc.step_state: the last window row is rewritten from the
-    current temperature and the controller terms, the model predicts a delta, then
-    the window rolls and a row built from the new temperature is appended.
-    """
+    """Free-running rollout. Returns predicted temperatures, shape (B, horizon)."""
     window = batch["window"]              # (B, W, F) raw
     temp = batch["temp0"]                 # (B,)
     i_part = batch["i_part0"]
@@ -624,11 +614,7 @@ def read_band_table(run_dir: Path) -> list[float] | None:
 
 
 def cluster_config_vectors(vectors: list[list[float]], eps: float) -> list[int]:
-    """Single-linkage cluster label per band table, within radius eps.
-
-    Gains are compared in log10 space and range-normalized per dimension, giving a
-    space of diameter sqrt(9) = 3.0.
-    """
+    """Single-linkage cluster label per band table, within radius eps."""
     arr = np.log10(np.maximum(np.asarray(vectors, dtype=np.float64), 1.0))
     low = arr.min(axis=0)
     arr = (arr - low) / np.maximum(arr.max(axis=0) - low, 1e-9)
@@ -760,15 +746,8 @@ def apply_split_lock(
     groups: dict[str, str],
     lock_path: Path,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Reuse a previously locked val/test split so improvement is comparable across
-    repeated runs, folding in any run collected since the lock as training data.
-
-    A newly collected run is excluded from training (not added to val/test either)
-    if its current PID-config cluster overlaps a locked val/test run: the group
-    clustering used here is a single-linkage over the whole dataset, so it can
-    reassign as new points arrive, and a run must not silently join training data
-    just because clustering happened to move it away from a held-out group.
-    """
+    """Reuse a previously locked val/test split, folding in any run collected
+    since the lock as training data."""
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     locked_val = [r for r in lock["val_runs"] if r in frames]
     locked_test = [r for r in lock["test_runs"] if r in frames]
@@ -921,9 +900,7 @@ def make_rollout_loader(
 
 
 def find_run_csvs_multi(history_roots: Sequence[str], telemetry_names: Sequence[str]) -> list[Path]:
-    """find_run_csvs over several roots, pooled. Each root is still scanned one
-    level deep, not recursively -- a run's CSV must sit directly under one of
-    these roots, e.g. run_history/<run_id>/run_samples.csv."""
+    """find_run_csvs over several roots, pooled."""
     csvs: list[Path] = []
     for root in history_roots:
         csvs.extend(find_run_csvs(Path(root), telemetry_names))
@@ -1084,10 +1061,7 @@ def make_scalers(
 
 
 def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
-    """Load runs, resolve the split, and build the rollout sample lists once.
-    Excludes anything depending on hyperparameters an Optuna search varies
-    (batch size, model architecture); those are applied in train_rollout_model().
-    """
+    """Load runs, resolve the split, and build the rollout sample lists once."""
     if args.rollout_steps < 1:
         raise ValueError("--rollout-steps must be >= 1")
     if args.rollout_stride < 1 or args.eval_stride < 1:
@@ -1166,16 +1140,17 @@ def prepare_rollout_data(args: argparse.Namespace) -> dict[str, object]:
 
     init_checkpoint = None
     if args.init_from:
-        from lstm.lstm_common import _ensure_sklearn_stub
+        from digitaltwin.common import _ensure_sklearn_stub
 
         _ensure_sklearn_stub()
         init_checkpoint = torch.load(Path(args.init_from), map_location=device, weights_only=False)
+        args.model_family = init_checkpoint.get("model_family", args.model_family)
         args.hidden_dim = int(init_checkpoint["hidden_dim"])
         args.num_layers = int(init_checkpoint["num_layers"])
         args.dropout = float(init_checkpoint["dropout"])
         args.layer_norm = bool(init_checkpoint.get("layer_norm", False))
         args.window_steps = int(init_checkpoint.get("window_steps", args.window_steps))
-        print(f"[init] warm-starting from {args.init_from} "
+        print(f"[init] warm-starting {args.model_family} from {args.init_from} "
               f"(hidden={args.hidden_dim} layers={args.num_layers} window={args.window_steps})")
 
     scalers, x_scaler, y_scaler = make_scalers(frames, train_runs, args, device, init_checkpoint)
@@ -1226,10 +1201,8 @@ def train_rollout_model(
     trial=None,
     metric_prefix: str = "",
 ) -> dict[str, object]:
-    """Build loaders/model for one hyperparameter configuration and run the epoch
-    loop, selecting on rollout MAE. Used both for the final training pass and,
-    with `trial` set and `checkpoint_path`-saving skipped, for each Optuna trial.
-    """
+    """Build the model for one hyperparameter configuration and run the epoch
+    loop, selecting on rollout MAE."""
     device = data["device"]
     feature_index = data["feature_index"]
     scalers = data["scalers"]
@@ -1238,7 +1211,7 @@ def train_rollout_model(
     train_loader = make_rollout_loader(data["train_samples"], args.batch_size, True, args.seed)
     val_loader = make_rollout_loader(data["val_samples"], args.batch_size, False, args.seed)
 
-    model = LSTMModel(
+    model = MODEL_CLASSES[args.model_family](
         input_dim=len(FEATURE_NAMES), hidden_dim=args.hidden_dim,
         num_layers=args.num_layers, dropout=args.dropout, layer_norm=args.layer_norm,
     ).to(device)
@@ -1384,6 +1357,7 @@ def finalize_rollout_run(
     atomic_torch_save(
         {
             "model_state_dict": model.state_dict(),
+            "model_family": args.model_family,
             "input_dim": len(FEATURE_NAMES),
             "hidden_dim": args.hidden_dim,
             "num_layers": args.num_layers,
@@ -1474,16 +1448,14 @@ def finalize_rollout_run(
 
 
 def suggest_tbptt_choices(rollout_steps: int) -> list[int]:
-    """--tbptt-steps candidates for an Optuna trial, scaled to --rollout-steps.
-    Full BPTT (0) is only offered at short horizons (<= 40 steps)."""
+    """--tbptt-steps candidates for an Optuna trial, scaled to the rollout horizon."""
     horizon = max(1, int(rollout_steps))
     truncated = sorted({max(1, horizon // 10), max(1, horizon // 4), max(1, horizon // 2)})
     return [0, *truncated] if horizon <= 40 else truncated
 
 
 def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namespace:
-    """Sample one trial's hyperparameters. Architecture (hidden_dim/num_layers/
-    dropout/layer_norm) is left untouched when --init-from is set."""
+    """Sample one trial's hyperparameters."""
     updates: dict[str, object] = {}
     if not base_args.init_from:
         updates["hidden_dim"] = trial.suggest_categorical("hidden_dim", [32, 64, 96, 128, 192, 256])
@@ -1604,7 +1576,7 @@ def train_and_validate(args: argparse.Namespace) -> dict[str, object]:
         data = prepare_rollout_data(args)
 
         if mlflow is not None:
-            mlflow.set_tag("model_family", "lstm_rollout")
+            mlflow.set_tag("model_family", f"{args.model_family}_rollout")
             mlflow.set_tag("target", "temp(t+1 row) - temp(t)")
             mlflow.set_tag("control_mode", args.control_mode)
             log_params_with_prefix(mlflow, vars(args))
@@ -1773,7 +1745,7 @@ def run_watch_loop(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = build_arg_parser().parse_args()
+    args = resolve_family_defaults(build_arg_parser().parse_args())
     if args.watch:
         run_watch_loop(args)
     else:

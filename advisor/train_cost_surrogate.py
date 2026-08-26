@@ -2,7 +2,7 @@
 """Train an MLP cost surrogate for CEM candidate screening.
 
 Predicts a candidate PID's rollout cost directly from a state
-(temp, current_pid, candidate_pid), instead of simulating the GRU twin.
+(temp, current_pid, candidate_pid), instead of simulating the digital twin.
 
 1. Generate a labeled dataset: sample (temp, current_pid) states, score
    candidate PIDs per state via deepvac.mpc_batch.rollout_population and
@@ -23,7 +23,7 @@ same horizon advisor/advise_pid.py must be run with.
 
 Example:
 
-    python -m advisor.train_cost_surrogate --checkpoint gru/validation_rollout/gru_rollout.pt
+    python -m advisor.train_cost_surrogate --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt
 """
 
 from __future__ import annotations
@@ -48,8 +48,8 @@ from deepvac.mpc import add_common_mpc_args, sample_candidates_random
 from deepvac.mpc_batch import rollout_population
 from deepvac.pid import pid_bounds
 
-from gru.gru_common import load_model
-from gru.twin_acceptance import rank_correlation
+from digitaltwin.common import load_model
+from digitaltwin.twin_acceptance import rank_correlation
 
 from advisor.advise_pid import add_cost_args, build_initial_state, horizon_cost
 from advisor.cost_surrogate import FEATURE_NAMES, CostSurrogateMLP
@@ -60,7 +60,7 @@ DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "cost_surrogate_runs"
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Train a fast cost surrogate for CEM candidate screening.")
 
-    ap.add_argument("--checkpoint", required=True, help="A rollout-trained GRU checkpoint.")
+    ap.add_argument("--checkpoint", required=True, help="A rollout-trained digital-twin checkpoint (GRU or LSTM).")
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--dataset-csv", default=None,
                     help="Reuse a previously generated dataset instead of sampling again.")

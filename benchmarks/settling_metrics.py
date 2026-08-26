@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import iter_run_dirs, save_json  # noqa: E402
+from deepvac.artifacts import iter_run_dirs, save_json  
 
 OUTPUT_DIR = Path(__file__).with_name("output")
 REQUIRED_COLS = ("timestamp", "temp", "temp_ref")

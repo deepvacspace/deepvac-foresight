@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -9,9 +11,9 @@ import torch
 from deepvac import mpc as _mpc
 from deepvac import mpc_batch
 
-gru_common = pytest.importorskip("gru.gru_common")
+gru_common = pytest.importorskip("digitaltwin.common")
 
-CHECKPOINT = gru_common.DEFAULT_CHECKPOINT
+CHECKPOINT = Path(gru_common.__file__).resolve().parent / "gru" / "validation_t1" / "gru_t1.pt"
 pytestmark = pytest.mark.skipif(
     not CHECKPOINT.exists(), reason=f"GRU checkpoint not available at {CHECKPOINT}"
 )

@@ -29,8 +29,8 @@ flowchart TB
         Artifacts[artifacts.py<br/>run-id/CSV/JSON, batch orchestration]
     end
 
-    subgraph Twin["gru/ + lstm/ -- digital twins"]
-        Train[train_gru.py / train_lstm.py]
+    subgraph Twin["digitaltwin/ -- GRU/LSTM digital twins"]
+        Train[train.py --model-family gru|lstm]
         Sim[simulate_gru.py / simulate_runs.py]
         Mpcgru[mpc_gru.py / mpc_lstm.py]
     end
@@ -79,9 +79,10 @@ either write live PID values back to the chamber (`*_experiment.py`,
 `tocero_*.py`, `collect_runs.py`, `training_loop.py`) or fit GP-BO models to past
 runs and suggest candidates (`band_bo_gp.py`, `compute_one_model.py`). Every run's
 samples and summaries land as CSV/JSON under a `run_history`-style directory.
-`gru/` and `lstm/` train plant models on that history, then use the checkpoint for
-offline simulation (`simulate_*.py`) or a receding-horizon MPC scheduler
-(`mpc_gru.py` / `mpc_lstm.py`, both over `deepvac/mpc.py`).
+`digitaltwin/` trains plant models on that history (`--model-family gru` or
+`lstm`), then uses the checkpoint for offline simulation (`simulate_*.py`) or a
+receding-horizon MPC scheduler (`mpc_gru.py` / `mpc_lstm.py`, both over
+`deepvac/mpc.py`).
 
 ### Package layout
 
@@ -89,12 +90,12 @@ offline simulation (`simulate_*.py`) or a receding-horizon MPC scheduler
   `datasets`, `models`, `mpc`, `artifacts`, and the `deepvac` CLI dispatcher.
 - `tcp/` -- chamber TCP protocol codec, transport, and small standalone
   read/write scripts.
-- `gru/`, `lstm/` -- GRU/LSTM plant-model training, offline simulation, and
-  MPC PID scheduling. Each owns its own `validation_t1/`, `plots_t1/`,
-  `mlruns/` output directories, resolved relative to the script's own file
-  location rather than your working directory. Use `lstm/train_lstm.py`;
-  `lstm/lstm.py` + `lstm/predict.py` are a separate pickle-based pipeline with
-  its own feature set, kept for comparison only.
+- `digitaltwin/` -- GRU/LSTM plant-model training, offline simulation, and MPC
+  PID scheduling, with the architecture selected by `--model-family {gru,lstm}`
+  rather than split across separate packages. Each family owns its own
+  `digitaltwin/<family>/validation_t1/`, `plots_t1/`, `mlruns/` output
+  directories, resolved relative to the script's own file location rather than
+  your working directory.
 - `optimization/` -- Bayesian optimization / AI advisor, live-chamber replay
   scripts, and run analysis/plotting.
 
@@ -131,22 +132,22 @@ overwrite it with the CPU build.
 
 One entry point, `deepvac`, dispatches to every script below, forwarding your
 flags to that script's own argument parser unchanged -- `deepvac train-gru --help`
-is identical to `python -m gru.train_gru --help`:
+is identical to `python -m digitaltwin.train --model-family gru --help`:
 
 ```powershell
 deepvac --list                 # every subcommand with a one-line description
 deepvac train-gru --help
 deepvac mpc-lstm --checkpoint lstm\validation_t1\lstm_t1.pt --cpu --duration-s 600
-deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt
+deepvac package-model --checkpoint digitaltwin\gru\validation_t1\gru_t1.pt
 ```
 
-Running scripts directly as modules (`python -m gru.train_gru --help`) still
-works identically and is what the examples below use, since it makes the
+Running scripts directly as modules (`python -m digitaltwin.train --model-family gru --help`)
+still works identically and is what the examples below use, since it makes the
 underlying package explicit.
 
 ## Dataset / run schema
 
-Every run (physical, from `optimization/`, or simulated, from `gru/`/`lstm/`)
+Every run (physical, from `optimization/`, or simulated, from `digitaltwin/`)
 is a directory of CSV/JSON files. The common columns, defined once in
 `deepvac/schemas.py` and `deepvac/datasets.py`:
 
@@ -161,27 +162,29 @@ is a directory of CSV/JSON files. The common columns, defined once in
 
 A trained checkpoint (`gru_t1.pt` / `lstm_t1.pt`) is a `torch.save` dict with
 `model_state_dict`, `x_scaler`/`y_scaler` (fitted `StandardScaler`s),
-`feature_names`, and `window_steps` -- see `gru/gru_common.py:load_model` /
-`lstm/mpc_lstm.py:load_model`.
+`feature_names`, `window_steps`, and a stamped `model_family` -- see
+`digitaltwin/common.py:load_model`, which reads that stamp to pick GRU vs. LSTM
+automatically.
 
 ## End-to-end examples
 
 All paths are relative to this `scripts/` directory; run from here so the
-package-qualified imports (`python -m gru.train_gru`, not
-`python train_gru.py`) resolve deterministically.
+package-qualified imports (`python -m digitaltwin.train`, not
+`python train.py`) resolve deterministically.
 
 ### 1. Offline training
 
 ```powershell
-python -m gru.train_gru --history-root optimization\run_history --window-steps 60 --epochs 50
+python -m digitaltwin.train --model-family gru --history-root optimization\run_history --window-steps 60 --epochs 50
 ```
-Writes a checkpoint to `gru\validation_t1\gru_t1.pt`, a training-curve plot to
-`gru\plots_t1\`, and a `validation_report_t1.json`. This trains and selects on a
-single step; `gru\train_gru_rollout.py` trains and selects on a multi-step
-rollout instead, matching how the MPC unrolls the model:
+Writes a checkpoint to `digitaltwin\gru\validation_t1\gru_t1.pt`, a
+training-curve plot to `digitaltwin\gru\plots_t1\`, and a
+`validation_report_t1.json`. This trains and selects on a single step;
+`digitaltwin\train_rollout.py` trains and selects on a multi-step rollout
+instead, matching how the MPC unrolls the model:
 
 ```powershell
-python -m gru.train_gru_rollout --init-from gru\validation_t1\gru_t1.pt --rollout-steps 40 --epochs 40
+python -m digitaltwin.train_rollout --model-family gru --init-from digitaltwin\gru\validation_t1\gru_t1.pt --rollout-steps 40 --epochs 40
 ```
 
 - **`--rollout-steps`** sets the unroll length the loss is computed over.
@@ -196,21 +199,21 @@ python -m gru.train_gru_rollout --init-from gru\validation_t1\gru_t1.pt --rollou
   every triplet in the run. The report's `test_configs_seen_in_train` counts how
   many held-out configurations leaked into training.
 
-Output goes to `gru\validation_rollout\`. The checkpoint layout matches
-`train_gru.py`, so it drops straight into `mpc_gru.py`, `mpc_batch.py`, and
+Output goes to `digitaltwin\gru\validation_rollout\`. The checkpoint layout
+matches `train.py`, so it drops straight into `mpc_gru.py`, `mpc_batch.py`, and
 `simulate_gru.py`.
 
 ### 2. Offline simulation (no hardware)
 
 ```powershell
-python -m gru.simulate_gru --checkpoint gru\validation_t1\gru_t1.pt --history-root optimization\run_history
+python -m gru.simulate_gru --checkpoint digitaltwin\gru\validation_t1\gru_t1.pt --history-root optimization\run_history
 ```
 Picks a historical run from `--history-root` (or a specific one via `--run-id`),
 replays it in closed loop through the trained GRU + `ChamberPID`, and reports
 reconstruction error against the logged trajectory. For an arbitrary
 start/target temperature with no historical run, use the MPC scheduler's own
 rollout instead:
-`python -m gru.mpc_gru --checkpoint gru\validation_t1\gru_t1.pt --cpu --start-temp 27 --target-temp 0 --duration-s 1200`.
+`python -m gru.mpc_gru --checkpoint digitaltwin\gru\validation_t1\gru_t1.pt --cpu --start-temp 27 --target-temp 0 --duration-s 1200`.
 
 ### 3. PID recommendation (Bayesian optimization, offline)
 
@@ -295,7 +298,7 @@ writes into either app's checkout directly. Requires the `package` extra
 (`pip install -e ".[package]" -r requirements\package.lock.txt`).
 
 ```powershell
-deepvac package-model --checkpoint gru\validation_t1\gru_t1.pt
+deepvac package-model --checkpoint digitaltwin\gru\validation_t1\gru_t1.pt
 ```
 
 Every run stages both outputs side by side, ready to move by hand:

@@ -3,14 +3,15 @@ from __future__ import annotations
 import math
 import sys
 import types
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, Sequence, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 
 from deepvac.schemas import DEFAULT_FEATURE_NAMES  # noqa: F401
+from digitaltwin.model import GRUModel, LSTMModel, MODEL_CLASSES  # noqa: F401
 
 
 def _ensure_sklearn_stub() -> None:
@@ -53,111 +54,12 @@ def _ensure_sklearn_stub() -> None:
     sys.modules["sklearn.preprocessing"] = pre_mod
 
 
-DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "lstm_t1.pt"
-
-
-class LayerNormLSTMCell(nn.Module):
-    """An LSTM cell with LayerNorm on each gate's pre-activation (Ba et al. style).
-    Duplicated from lstm/model.py; must stay structurally identical."""
-
-    def __init__(self, input_size: int, hidden_size: int) -> None:
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.weight_ih = nn.Linear(input_size, 4 * hidden_size)
-        self.weight_hh = nn.Linear(hidden_size, 4 * hidden_size, bias=False)
-        self.ln_ih = nn.LayerNorm(4 * hidden_size)
-        self.ln_hh = nn.LayerNorm(4 * hidden_size)
-
-    def forward(
-        self, x: torch.Tensor, h: torch.Tensor, c: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        gi = self.ln_ih(self.weight_ih(x))
-        gh = self.ln_hh(self.weight_hh(h))
-        i_i, i_f, i_g, i_o = gi.chunk(4, dim=-1)
-        h_i, h_f, h_g, h_o = gh.chunk(4, dim=-1)
-        i_gate = torch.sigmoid(i_i + h_i)
-        f_gate = torch.sigmoid(i_f + h_f)
-        g_gate = torch.tanh(i_g + h_g)
-        o_gate = torch.sigmoid(i_o + h_o)
-        c_next = f_gate * c + i_gate * g_gate
-        h_next = o_gate * torch.tanh(c_next)
-        return h_next, c_next
-
-
-class LayerNormLSTM(nn.Module):
-    """Multi-layer batch-first stack of LayerNormLSTMCell. Drop-in for nn.LSTM's
-    forward(x) -> (output, (h_n, c_n)) shape. See lstm/model.py."""
-
-    def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1, dropout: float = 0.0) -> None:
-        super().__init__()
-        self.num_layers = num_layers
-        self.hidden_size = hidden_size
-        self.cells = nn.ModuleList([
-            LayerNormLSTMCell(input_size if i == 0 else hidden_size, hidden_size)
-            for i in range(num_layers)
-        ])
-        self.dropout = nn.Dropout(dropout) if (dropout > 0 and num_layers > 1) else None
-
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        batch, seq_len, _ = x.shape
-        h = [x.new_zeros(batch, self.hidden_size) for _ in range(self.num_layers)]
-        c = [x.new_zeros(batch, self.hidden_size) for _ in range(self.num_layers)]
-        outputs = []
-        for t in range(seq_len):
-            layer_input = x[:, t, :]
-            for i, cell in enumerate(self.cells):
-                h[i], c[i] = cell(layer_input, h[i], c[i])
-                layer_input = h[i]
-                if self.dropout is not None and i < self.num_layers - 1:
-                    layer_input = self.dropout(layer_input)
-            outputs.append(h[-1])
-        return torch.stack(outputs, dim=1), (torch.stack(h, dim=0), torch.stack(c, dim=0))
-
-
-class LSTMModel(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 64,
-        num_layers: int = 2,
-        dropout: float = 0.10,
-        layer_norm: bool = False,
-    ) -> None:
-        super().__init__()
-        self.layer_norm = bool(layer_norm)
-
-        if self.layer_norm:
-            self.lstm = LayerNormLSTM(
-                input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout,
-            )
-        else:
-            self.lstm = nn.LSTM(
-                input_size=input_dim,
-                hidden_size=hidden_dim,
-                num_layers=num_layers,
-                batch_first=True,
-                dropout=dropout if num_layers > 1 else 0.0,
-            )
-
-        self.head = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, _ = self.lstm(x)
-        return self.head(out[:, -1, :])
-
-
 def limit(low: float, x: float, high: float) -> float:
     return max(low, min(float(x), high))
 
 
 class CodesysDiff:
-    """Stateful implementation of gru/codesys/diff.txt."""
+    """Stateful implementation of digitaltwin/codesys/diff.txt."""
 
     def __init__(self, dc: float = 0.995) -> None:
         self.dc = float(dc)
@@ -175,11 +77,11 @@ class CodesysDiff:
 
 
 class PidCoefSelector:
-    """Python equivalent of gru/codesys/pidcoefselector.txt."""
+    """Python equivalent of digitaltwin/codesys/pidcoefselector.txt."""
 
     def __init__(
         self,
-        points: Sequence[Tuple[float, float, float]],
+        points: Sequence[tuple[float, float, float]],
         min_range: float,
         max_range: float,
     ) -> None:
@@ -192,7 +94,7 @@ class PidCoefSelector:
         if self.range_width == 0.0:
             raise ValueError("PidCoefSelector max_range must differ from min_range.")
 
-    def get_coefs(self, x: float) -> Tuple[float, float, float, int]:
+    def get_coefs(self, x: float) -> tuple[float, float, float, int]:
         raw_index = math.trunc((float(x) - self.min_range) / self.range_width)
         interval_index = int(limit(0, raw_index, self.points_count))
         interval_index = min(interval_index, self.points_count - 1)
@@ -224,7 +126,7 @@ class ChamberPID:
         i_coef: float,
         d_coef: float,
         diff_out: float,
-    ) -> Tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float]:
         if not enable:
             self.p_part = 0.0
             self.i_part = 0.0
@@ -264,11 +166,15 @@ class ChamberPID:
 def load_model(
     checkpoint_path: Path,
     device: torch.device,
-) -> Tuple[LSTMModel, Dict[str, object]]:
+    model_family: str | None = None,
+) -> tuple[nn.Module, dict[str, object]]:
     _ensure_sklearn_stub()
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    model = LSTMModel(
+    family = model_family or checkpoint.get("model_family", "gru")
+    model_cls = MODEL_CLASSES[family]
+
+    model = model_cls(
         input_dim=int(checkpoint["input_dim"]),
         hidden_dim=int(checkpoint["hidden_dim"]),
         num_layers=int(checkpoint["num_layers"]),
@@ -283,8 +189,8 @@ def load_model(
 
 
 def predict_delta_t1(
-    model: LSTMModel,
-    checkpoint: Dict[str, object],
+    model: nn.Module,
+    checkpoint: dict[str, object],
     feature_window: np.ndarray,
     device: torch.device,
 ) -> float:

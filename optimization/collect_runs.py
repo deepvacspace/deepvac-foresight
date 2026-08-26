@@ -42,9 +42,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import append_row_csv, append_rows_csv, history_run_file, make_run_id, save_json  # noqa: E402
-from deepvac.pid import parse_bounds, read_pid_from_tcp  # noqa: E402
-from tcp.tcp_common import (  # noqa: E402
+from deepvac.artifacts import append_row_csv, append_rows_csv, history_run_file, make_run_id, save_json  
+from deepvac.pid import parse_bounds, read_pid_from_tcp  
+from tcp.tcp_common import (  
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,

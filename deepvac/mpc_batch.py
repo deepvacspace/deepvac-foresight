@@ -1,6 +1,6 @@
 """Vectorized GRU+MPC rollouts: score a whole candidate population in one batch.
 
-A vectorization of gru_common.ChamberPID, gru_common.CodesysDiff and
+A vectorization of digitaltwin.common.ChamberPID, digitaltwin.common.CodesysDiff and
 deepvac.mpc.step_state. Only i_part, diff.prev_value and diff.filter_out carry
 across steps; every other PID term is recomputed.
 """
@@ -26,7 +26,7 @@ from deepvac.pid import clip_pid, pid_bounds
 
 CostFn = Callable[..., dict[str, float]]
 
-# gru_common.CodesysDiff / ChamberPID internal limits.
+# digitaltwin.common.CodesysDiff / ChamberPID internal limits.
 _DIFF_CLIP = 5.0
 _DIFF_GAIN = 10.0
 _D_PART_CLIP = 0.4
@@ -38,7 +38,7 @@ def _vec_diff_update(
     filter_out: np.ndarray,
     dc: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Vectorized gru_common.CodesysDiff.update."""
+    """Vectorized digitaltwin.common.CodesysDiff.update."""
     diff_value = value - prev_value
     filter_in = np.clip(diff_value, -_DIFF_CLIP, _DIFF_CLIP)
     filter_out = dc * filter_out + (1.0 - dc) * filter_in
@@ -59,7 +59,7 @@ def _vec_pid_step(
     u_max: float,
     i_reverse_mul: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Vectorized gru_common.ChamberPID.step (enable=True).
+    """Vectorized digitaltwin.common.ChamberPID.step (enable=True).
 
     Mirrors the scalar ordering exactly: u sums the *unclipped* p_part with the
     clipped i_part/d_part, and p_part is only clipped afterwards for reporting.
@@ -193,7 +193,7 @@ def batched_predict_delta(
     windows: np.ndarray,
     device: torch.device,
 ) -> np.ndarray:
-    """Batched gru_common.predict_delta_t1 over (N, window_steps, n_features)."""
+    """Batched digitaltwin.common.predict_delta_t1 over (N, window_steps, n_features)."""
     x_scaler = checkpoint["x_scaler"]
     y_scaler = checkpoint["y_scaler"]
 

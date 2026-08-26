@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Label randomized GRU-twin states with CEM's chosen PID triplet, producing a
+"""Label randomized digital-twin states with CEM's chosen PID triplet, producing a
 (observation, action) dataset for advisor.train_policy_bc.
 
 Each episode starts from a random (temp, kp, ki, kd). At every decision point
@@ -10,7 +10,7 @@ choice before advancing to the next decision.
 
 Example:
 
-    python -m advisor.generate_bc_dataset --checkpoint gru/validation_rollout/gru_rollout.pt --n-states 20000
+    python -m advisor.generate_bc_dataset --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt --n-states 20000
 """
 
 from __future__ import annotations
@@ -26,14 +26,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.mpc import SimState, add_common_mpc_args, initialize_feature_window, step_state  # noqa: E402
-from deepvac.mpc_batch import optimize_pid_batched  # noqa: E402
-from deepvac.pid import clip_pid, pid_bounds  # noqa: E402
+from deepvac.mpc import SimState, add_common_mpc_args, initialize_feature_window, step_state  
+from deepvac.mpc_batch import optimize_pid_batched  
+from deepvac.pid import clip_pid, pid_bounds  
 
-from gru.gru_common import ChamberPID, CodesysDiff, load_model, predict_delta_t1  # noqa: E402
+from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
 
-from advisor.advise_pid import add_cost_args, horizon_cost  # noqa: E402
-from advisor.train_policy_ppo import DIFF_CLIP  # noqa: E402
+from advisor.advise_pid import add_cost_args, horizon_cost  
+from advisor.train_policy_ppo import DIFF_CLIP  
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "bc_dataset" / "cem_labels.npz"
 
@@ -41,7 +41,7 @@ DEFAULT_OUTPUT = Path(__file__).resolve().parent / "bc_dataset" / "cem_labels.np
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Label randomized twin states with CEM's chosen PID for behavior cloning.")
 
-    ap.add_argument("--checkpoint", required=True, help="A rollout-trained GRU checkpoint.")
+    ap.add_argument("--checkpoint", required=True, help="A rollout-trained digital-twin checkpoint (GRU or LSTM).")
     ap.add_argument("--output", default=str(DEFAULT_OUTPUT))
     ap.add_argument("--n-states", type=int, default=20_000)
     ap.add_argument("--mpc-hold-s", type=float, default=20.0, help="One decision's duration.")

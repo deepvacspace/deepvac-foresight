@@ -41,12 +41,12 @@ client_id.json
 credentials.json
 
 /plots
-/gru/diagnose_codesys.py
-/gru/diagnostics_t1/
-/gru/plots_t1/
-/gru/simulation_t1/
-/gru/validation_t1/
-/gru/validation/
+/digitaltwin/gru/diagnose_codesys.py
+/digitaltwin/gru/diagnostics_t1/
+/digitaltwin/gru/plots_t1/
+/digitaltwin/gru/simulation_t1/
+/digitaltwin/gru/validation_t1/
+/digitaltwin/gru/validation/
 
 /.claude
 
@@ -56,32 +56,16 @@ credentials.json
 /overview.md
 
 
-/gru/gru_ranked_pid_runs/
-/gru/mlruns/
-/gru/mpc_pid_runs/
-/gru/mpc_pid_runs_batch
-/lstm/mpc_pid_runs/
-/lstm/mpc_pid_runs_batch/
-/lstm/old/
-/lstm/mlruns/
-/lstm/plots_t1/
-/lstm/validation_t1/
-
-# Deprecated pre-deepvac lstm scripts and their artifacts, superseded by
-# train_lstm.py / train_lstm_rollout.py and the lstm_common.py-based advisor
-# pipeline. Kept on disk, not tracked.
-/lstm/lstm.py
-/lstm/mpc_lstm.py
-/lstm/batch_mpc_runs.py
-/lstm/predict.py
-/lstm/lstm_model.pkl
-/lstm/lstm_prediction.csv
-/lstm/lstm_prediction.png
-/lstm/lstm_predictions.csv
-/lstm/lstm_test_metrics.csv
-/lstm/lstm_test_runs_10.png
-/lstm/lstm_training_10.png
-/lstm/plots/
+/digitaltwin/gru/gru_ranked_pid_runs/
+/digitaltwin/gru/mlruns/
+/digitaltwin/gru/mpc_pid_runs/
+/digitaltwin/gru/mpc_pid_runs_batch
+/digitaltwin/lstm/mpc_pid_runs/
+/digitaltwin/lstm/mpc_pid_runs_batch/
+/digitaltwin/lstm/old/
+/digitaltwin/lstm/mlruns/
+/digitaltwin/lstm/plots_t1/
+/digitaltwin/lstm/validation_t1/
 
 /packaging
 

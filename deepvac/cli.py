@@ -2,7 +2,9 @@
 """Unified `deepvac` command-line entry point.
 
 Each subcommand imports its script module and forwards the remaining argv to
-that module's own `main()` / `build_arg_parser()`.
+that module's own `main()` / `build_arg_parser()`, with `extra_args` (if any)
+spliced in first -- used to pin a family-selectable digitaltwin/ script to
+gru or lstm under separate command names.
 
 Usage:
     deepvac <command> [--help] [command-specific flags...]
@@ -14,12 +16,36 @@ from __future__ import annotations
 import importlib
 import sys
 
-# command name -> (module to import, one-line description)
-# Grouped to match the module layout; run `deepvac --list` for the live list.
-COMMANDS: dict[str, tuple[str, str]] = {
-    # --- GRU digital twin --------------------------------------------------
-    "train-gru": ("gru.train_gru", "Pretrain the one-step GRU plant model (stage 1)."),
-    "train-gru-rollout": ("gru.train_gru_rollout", "Train the GRU on rollouts, selected on rollout error (stage 2)."),
+# command name -> (module to import, one-line description, extra argv spliced
+# in before the user's own flags). Grouped to match the module layout; run
+# `deepvac --list` for the live list.
+COMMANDS: dict[str, tuple[str, str] | tuple[str, str, tuple[str, ...]]] = {
+    # --- GRU/LSTM digital twin (digitaltwin/) -------------------------------
+    "train-gru": ("digitaltwin.train", "Pretrain the one-step GRU plant model (stage 1).",
+                 ("--model-family", "gru")),
+    "train-lstm": ("digitaltwin.train", "Pretrain the one-step LSTM plant model (stage 1).",
+                  ("--model-family", "lstm")),
+    "train-gru-rollout": ("digitaltwin.train_rollout",
+                          "Train the GRU on rollouts, selected on rollout error (stage 2).",
+                          ("--model-family", "gru")),
+    "train-lstm-rollout": ("digitaltwin.train_rollout",
+                           "Train the LSTM on rollouts, selected on rollout error (stage 2).",
+                           ("--model-family", "lstm")),
+    "twin-acceptance": ("digitaltwin.twin_acceptance",
+                        "Score a GRU checkpoint as a whole-run digital twin, live or offline.",
+                        ("--model-family", "gru")),
+    "twin-acceptance-lstm": ("digitaltwin.twin_acceptance",
+                             "Score an LSTM checkpoint as a whole-run digital twin, live or offline.",
+                             ("--model-family", "lstm")),
+    "predict-run": ("digitaltwin.predict_run",
+                    "Predict a whole-run trajectory for a candidate PID, no chamber run needed.",
+                    ("--model-family", "gru")),
+    "predict-run-lstm": ("digitaltwin.predict_run",
+                        "Predict a whole-run trajectory (LSTM twin), no chamber run needed.",
+                        ("--model-family", "lstm")),
+
+    # --- Pre-existing entries pointing at scripts not present in this repo
+    # (predate the gru/ + lstm/ -> digitaltwin/ merge; left as-is, out of scope) --
     "train-gru-multihorizon": ("gru.gru_multi_time", "Train/validate/test the multi-horizon GRU plant model."),
     "simulate-gru": ("gru.simulate_gru", "Closed-loop reconstruction via trained GRU + ChamberPID."),
     "simulate-runs": ("gru.simulate_runs", "Rank PID triplets via GRU + CODESYS PID simulation."),
@@ -30,11 +56,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "gp-build": ("gru.gp_build", "Build the historical PID candidate table for GRU ranking."),
     "mpc-build": ("gru.mpc_build", "Build the candidate table for history-seeded GRU MPC."),
     "diagnose-codesys": ("gru.diagnose_codesys", "Validate GRU replay-control + CODESYS PID reconstruction."),
-    "twin-acceptance": ("gru.twin_acceptance", "Score a GRU checkpoint as a whole-run digital twin, live or offline."),
-    "predict-run": ("gru.predict_run", "Predict a whole-run trajectory for a candidate PID, no chamber run needed."),
 
-    # --- LSTM digital twin --------------------------------------------------
-    "train-lstm": ("lstm.train_lstm", "Train/validate/tune/test the one-step LSTM plant model."),
     "predict-lstm": ("lstm.predict", "Evaluate a trained LSTM checkpoint against run history."),
     "mpc-lstm": ("lstm.mpc_lstm", "Continuous LSTM + MPC PID scheduler (CEM/random shooting)."),
     "batch-mpc-lstm": ("lstm.batch_mpc_runs", "Batch LSTM + MPC runs across scenarios, compare results."),
@@ -80,7 +102,7 @@ def _print_list() -> None:
     width = max(len(name) for name in COMMANDS)
     print("Available deepvac commands:\n")
     for name in sorted(COMMANDS):
-        _, description = COMMANDS[name]
+        _, description = COMMANDS[name][:2]
         print(f"  {name.ljust(width)}  {description}")
     print("\nRun `deepvac <command> --help` for that command's full flag list.")
 
@@ -102,11 +124,12 @@ def main(argv: list[str] | None = None) -> int:
         _print_list()
         return 2
 
-    module_name, _ = entry
+    module_name, _, *extra = entry
+    extra_args = list(extra[0]) if extra else []
     module = importlib.import_module(module_name)
     # The target module parses sys.argv itself, so present argv as if it had
-    # been invoked directly (python -m <module_name> <rest>).
-    sys.argv = [module_name, *rest]
+    # been invoked directly (python -m <module_name> <extra_args> <rest>).
+    sys.argv = [module_name, *extra_args, *rest]
     return module.main() or 0
 
 

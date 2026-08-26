@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Train a PPO policy network for real-time PID control against the GRU twin.
+"""Train a PPO policy network for real-time PID control against the digital twin.
 
 Reward is -horizon_cost() (advisor/advise_pid.py) over each --mpc-hold-s segment,
 accumulated with GAE across the episode.
 
 Example:
 
-    python -m advisor.train_policy_ppo --checkpoint gru/validation_rollout/gru_rollout.pt
+    python -m advisor.train_policy_ppo --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from deepvac.mpc import add_common_mpc_args, overshoot_array
 from deepvac.mpc_batch import _vec_run_pid_substeps, batched_predict_delta, feature_rows
 from deepvac.pid import clip_pid, pid_bounds
 
-from gru.gru_common import load_model
+from digitaltwin.common import load_model
 
 from advisor.advise_pid import add_cost_args, horizon_cost, normalized_pid_distance
 
@@ -39,9 +39,11 @@ DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "policy_ppo"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Train a PPO policy against the GRU twin, replacing CEM at decision time.")
+    ap = argparse.ArgumentParser(
+        description="Train a PPO policy against the digital twin, replacing CEM at decision time."
+    )
 
-    ap.add_argument("--checkpoint", required=True, help="A rollout-trained GRU checkpoint.")
+    ap.add_argument("--checkpoint", required=True, help="A rollout-trained digital-twin checkpoint (GRU or LSTM).")
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--mpc-hold-s", type=float, default=20.0, help="One RL step's duration.")
     ap.add_argument("--temp-min", type=float, default=-5.0)
@@ -105,7 +107,7 @@ def setup_tensorboard(args: argparse.Namespace, output_dir: Path):
 
 
 OBS_DIM = 8
-DIFF_CLIP = 5.0  # matches gru_common.CodesysDiff / deepvac.mpc_batch._DIFF_CLIP
+DIFF_CLIP = 5.0  # matches digitaltwin.common.CodesysDiff / deepvac.mpc_batch._DIFF_CLIP
 
 
 def mlp(input_dim: int, hidden_dim: int, num_layers: int, output_dim: int, output_activation: nn.Module | None) -> nn.Sequential:
@@ -156,7 +158,7 @@ class ActorCritic(nn.Module):
 
 
 class VecTwinEnv:
-    """N parallel episodes stepped through the GRU twin at once, one RL step per
+    """N parallel episodes stepped through the digital twin at once, one RL step per
     --mpc-hold-s segment. Auto-resets envs individually when an episode ends or
     a candidate's rollout goes invalid.
     """

@@ -5,7 +5,7 @@ Two kinds of synthetic data are reused across unit and integration tests:
 - A `history_root` of synthetic run_samples.csv files (write_synthetic_run),
   standing in for experiments/run_history/.
 - A tiny GRU checkpoint (tiny_gru_checkpoint) in the torch.save() shape
-  gru/gru_common.py:load_model expects.
+  digitaltwin/common.py:load_model expects.
 """
 
 from __future__ import annotations
@@ -86,10 +86,10 @@ def build_tiny_gru_checkpoint(
     seed: int = 0,
 ) -> Path:
     """Build and torch.save() a tiny, randomly-initialized GRU checkpoint in
-    the exact shape gru/gru_common.py:load_model expects -- fast enough to
+    the exact shape digitaltwin/common.py:load_model expects -- fast enough to
     construct fresh in every test that needs "a trained checkpoint" without
-    depending on gru/validation_t1/gru_t1.pt or any real training run."""
-    from gru.gru_common import GRUModel
+    depending on digitaltwin/gru/validation_t1/gru_t1.pt or any real training run."""
+    from digitaltwin.model import GRUModel
     from sklearn.preprocessing import StandardScaler
 
     torch.manual_seed(seed)

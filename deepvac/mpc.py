@@ -24,7 +24,7 @@ import pandas as pd
 import torch
 
 # Physical PID/differentiator emulation, shared by the GRU and LSTM schedulers.
-from gru.gru_common import ChamberPID, CodesysDiff
+from digitaltwin.common import ChamberPID, CodesysDiff
 
 from deepvac.pid import clip_pid, pid_bounds
 
@@ -38,8 +38,8 @@ class SimState:
     temp: float
     previous_temp: float
     feature_window: np.ndarray
-    pid: Any  # gru.gru_common.ChamberPID
-    diff: Any  # gru.gru_common.CodesysDiff
+    pid: Any  # digitaltwin.common.ChamberPID
+    diff: Any  # digitaltwin.common.CodesysDiff
     kp: float
     ki: float
     kd: float

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.11"
 # Only Python 3.10 is supported/validated (environment.yml pins 3.10.19).
 # The upper bound is deliberate: torch==2.12.0 and the sklearn-checkpoint
-# unpickling shim in gru/gru_common.py are only validated there.
+# unpickling shim in digitaltwin/common.py are only validated there.
 dependencies = []
 
 [project.optional-dependencies]
@@ -58,7 +58,7 @@ all = [
 deepvac = "deepvac.cli:main"
 
 [tool.setuptools]
-packages = ["deepvac", "gru", "lstm", "optimization", "tcp", "advisor"]
+packages = ["deepvac", "digitaltwin", "optimization", "tcp", "advisor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -70,15 +70,14 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-src = ["deepvac", "gru", "lstm", "optimization", "tcp", "advisor", "tests"]
+src = ["deepvac", "digitaltwin", "optimization", "tcp", "advisor", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-# Legacy scripts (gru/, lstm/, optimization/) predate ruff adoption here and
+# Legacy scripts (digitaltwin/, optimization/) predate ruff adoption here and
 # are not being reformatted wholesale as part of adding tests -- new/shared
 # code (deepvac/, tests/) is held to the full rule set.
 [tool.ruff.lint.per-file-ignores]
-"gru/*.py" = ["E501"]
-"lstm/*.py" = ["E501"]
+"digitaltwin/*.py" = ["E501"]
 "optimization/*.py" = ["E501"]
 "advisor/*.py" = ["E501"]

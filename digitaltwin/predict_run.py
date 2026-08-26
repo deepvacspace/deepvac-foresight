@@ -4,26 +4,31 @@
 No chamber connection and no run history are required -- only a trained checkpoint
 and the candidate you want to try:
 
-    python -m gru.predict_run --kp 6 --ki 997 --kd 16
+    python -m digitaltwin.predict_run --kp 6 --ki 997 --kd 16
 
 That holds one triplet for the whole run and seeds the model's starting window with
-gru.twin_acceptance.pid_driven_start: a settled chamber's temperature held constant
-while a real ChamberPID/CodesysDiff is stepped forward, so the seeded control terms
-reflect how long the error has actually been sitting rather than assuming a
-controller that has produced exactly zero output the whole time. Validated on 8
-held-out historical runs at ~1.3 degC median whole-run MAE, versus ~4.9 degC for the
-flat zero-control window and ~0.8 degC for a real warm start (see that function's
-docstring, and gru/twin_acceptance.py --mode replay --start-mode cold/warm).
+digitaltwin.twin_acceptance.pid_driven_start: a settled chamber's temperature held
+constant while a real ChamberPID/CodesysDiff is stepped forward, so the seeded
+control terms reflect how long the error has actually been sitting rather than
+assuming a controller that has produced exactly zero output the whole time.
+Validated on 8 held-out historical runs at ~1.3 degC median whole-run MAE, versus
+~4.9 degC for the flat zero-control window and ~0.8 degC for a real warm start
+(see that function's docstring, and digitaltwin/twin_acceptance.py --mode replay
+--start-mode cold/warm).
 
 If a real run_samples.csv is available -- your own past run, or any run recorded
 near the same starting condition -- pass --context-csv to warm-start from it
 instead. That is strictly more accurate; a warm start from a genuinely unrelated
 run is not, and can be worse than the no-telemetry estimate (see
-gru/twin_acceptance.py's module docstring for the measurement).
+digitaltwin/twin_acceptance.py's module docstring for the measurement).
+
+--model-family only picks the default --checkpoint when --checkpoint isn't
+passed explicitly; the model actually used is always whichever family the
+checkpoint itself is stamped with.
 
 Example, warm-started from a real run:
 
-    python -m gru.predict_run --kp 6 --ki 997 --kd 16 \
+    python -m digitaltwin.predict_run --kp 6 --ki 997 --kd 16 \
         --context-csv experiments/run_history/run_1776723160_994c5aad/run_samples.csv
 """
 
@@ -41,19 +46,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import make_run_id  # noqa: E402
-from deepvac.datasets import prepare_run_dataframe  # noqa: E402
+from deepvac.artifacts import make_run_id
+from deepvac.datasets import prepare_run_dataframe
 
-from gru.gru_common import load_model  # noqa: E402
-from gru.twin_acceptance import (  # noqa: E402
+from digitaltwin.common import load_model
+from digitaltwin.model import MODEL_CLASSES
+from digitaltwin.twin_acceptance import (
     describe_trajectory,
     simulate_twin,
     trajectory_cost,
     warm_start_at,
 )
 
-DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "validation_t1" / "gru_t1.pt"
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "predict_run"
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -61,8 +66,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Predict a whole-run trajectory for a candidate PID, no chamber run needed."
     )
 
-    ap.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT))
-    ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default="gru",
+                    help="Only used to pick the default --checkpoint below.")
+    ap.add_argument("--checkpoint", default=None,
+                    help="Default: <script-dir>/<model-family>/validation_t1/<model-family>_t1.pt.")
+    ap.add_argument("--output-dir", default=None,
+                    help="Default: <script-dir>/<model-family>/predict_run.")
     ap.add_argument("--session-name", default=None, help="Output subfolder name. Default: generated id.")
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--window-steps", type=int, default=60, help="Fallback only if the checkpoint lacks it.")
@@ -124,6 +133,12 @@ def load_context(args: argparse.Namespace, feature_names: list, window_steps: in
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.checkpoint is None:
+        args.checkpoint = str(
+            SCRIPT_DIR / args.model_family / "validation_t1" / f"{args.model_family}_t1.pt"
+        )
+    if args.output_dir is None:
+        args.output_dir = str(SCRIPT_DIR / args.model_family / "predict_run")
 
     if args.duration_s <= 0 or args.dt_s <= 0:
         raise ValueError("--duration-s and --dt-s must be > 0")

@@ -349,7 +349,11 @@ def summarize_metrics_by_run(pred_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("mae_delta_t1").reset_index(drop=True)
 
 
-def plot_training_history(history_rows: Sequence[dict[str, float]], output_path: Path) -> None:
+def plot_training_history(
+    history_rows: Sequence[dict[str, float]],
+    output_path: Path,
+    title: str = "One-step GRU Training Curve",
+) -> None:
     if not history_rows:
         return
 
@@ -359,7 +363,7 @@ def plot_training_history(history_rows: Sequence[dict[str, float]], output_path:
     ax.plot(history["epoch"], history["val_mae_delta_t1"], label="validation MAE delta t+1")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("MAE of temp delta (deg C/sample)")
-    ax.set_title("One-step GRU Training Curve")
+    ax.set_title(title)
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
