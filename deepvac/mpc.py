@@ -846,8 +846,20 @@ def optimize_pid_for_state(
                 )
 
     evaluated_rows.sort(key=lambda r: float(r["cost"]))
+    population_costs = np.asarray([float(r["cost"]) for r in evaluated_rows], dtype=float)
     best = dict(evaluated_rows[0])
     best_pid = np.asarray([best["kp"], best["ki"], best["kd"]], dtype=float)
+
+    # Representative PID triplets for the population's mean/median cost, so callers
+    # can roll these out and score them on the same footing as best/PPO instead of
+    # only knowing the aggregate cost number. Median uses the middle-ranked candidate
+    # (evaluated_rows is cost-sorted); mean uses the candidate closest to the mean
+    # cost, since no single candidate's cost equals the mean exactly.
+    mean_cost = float(np.mean(population_costs))
+    median_row = evaluated_rows[len(evaluated_rows) // 2]
+    mean_row = evaluated_rows[int(np.argmin(np.abs(population_costs - mean_cost)))]
+    population_mean_pid = (float(mean_row["kp"]), float(mean_row["ki"]), float(mean_row["kd"]))
+    population_median_pid = (float(median_row["kp"]), float(median_row["ki"]), float(median_row["kd"]))
 
     # Safety gate: keep current PID unless improvement is meaningful.
     if float(best["cost"]) >= current_cost - float(args.apply_margin):
@@ -863,6 +875,10 @@ def optimize_pid_for_state(
     best["n_evaluated"] = int(len(evaluated_rows))
     best["horizon_steps"] = int(horizon_steps)
     best["n_history_candidates"] = int(len(history_candidates))
+    best["population_mean_cost"] = mean_cost
+    best["population_median_cost"] = float(np.median(population_costs))
+    best["population_mean_pid"] = population_mean_pid
+    best["population_median_pid"] = population_median_pid
     if progress_enabled:
         total_ms = 1000.0 * (time.perf_counter() - progress_t0)
         print(
