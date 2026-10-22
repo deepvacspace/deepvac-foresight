@@ -34,7 +34,7 @@ def parse_bounds(text: str) -> tuple[float, float]:
 
 
 # -----------------------------------------------------------------------------
-# MPC-style array bounds (gru/mpc_gru.py, lstm/mpc_lstm.py).
+# MPC array bounds
 # -----------------------------------------------------------------------------
 
 
@@ -57,7 +57,7 @@ def clip_pid(x: np.ndarray, args: argparse.Namespace) -> np.ndarray:
 
 
 # -----------------------------------------------------------------------------
-# TCP readback and band scheduling (optimization/).
+# TCP readback and band scheduling
 # -----------------------------------------------------------------------------
 
 

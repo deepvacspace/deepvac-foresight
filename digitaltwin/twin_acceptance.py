@@ -1,35 +1,9 @@
 #!/usr/bin/env python3
-"""Measure how well a trained digital-twin checkpoint (GRU or LSTM) acts as a
-digital twin.
+"""Score a trained digital-twin checkpoint as a whole-run twin of the chamber.
 
-    --mode replay    Re-simulate whole logged runs closed-loop and compare against
-                     what the chamber actually did. No hardware needed. Beyond
-                     trajectory error this scores decision fidelity -- overshoot,
-                     time to band, tail MAE and cost -- and the rank correlation
-                     between predicted and measured cost, which is what determines
-                     whether MPC picks the same PID the chamber would.
-
-    --mode horizon   From many start points within logged runs, measure how
-                     prediction error grows with lookahead: mae/p90/divergence at
-                     each --lookahead-marks-s, both overall and by how close the
-                     run already was to target when the prediction started. The
-                     output is the trust horizon an MPC-style advisor should plan
-                     within.
-
-    --mode chamber   For each experiment, predict the whole run first, then drive
-                     the real chamber over TCP with the same PID triplet held for
-                     the entire run, then compare. One triplet per experiment.
-
---model-family only picks the default --checkpoint when --checkpoint isn't
-passed explicitly; the model actually used is always whichever family the
-checkpoint itself is stamped with.
-
-Examples:
-
-    python -m digitaltwin.twin_acceptance --mode replay --max-runs 40
-    python -m digitaltwin.twin_acceptance --mode horizon --max-runs 40
-    python -m digitaltwin.twin_acceptance --model-family lstm --mode chamber \
-        --num-tests 6 --pid-sets "6,997,16;10,500,20"
+    --mode replay    Re-simulate logged runs closed-loop and compare with what the chamber did.
+    --mode horizon   Measure how prediction error grows with lookahead from many start points.
+    --mode chamber   Predict a run, drive the real chamber with the same PID, then compare.
 """
 
 from __future__ import annotations
@@ -50,11 +24,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import torch  
-from deepvac.artifacts import append_row_csv, append_rows_csv, history_run_file, make_run_id  
-from deepvac.metrics import append_mae_column, compute_tail_cost  
-from deepvac.mpc import SimState, make_feature_row, run_pid_substeps, step_state  
-from tcp.tcp_common import (  
+import torch
+from deepvac.artifacts import append_row_csv, append_rows_csv, history_run_file, make_run_id
+from deepvac.metrics import append_mae_column, compute_tail_cost
+from deepvac.mpc import SimState, make_feature_row, run_pid_substeps, step_state
+from tcp.tcp_common import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
@@ -79,7 +53,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--mode", choices=["replay", "horizon", "chamber"], default="replay")
     ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default="gru",
-                    help="Only used to pick the default --checkpoint below.")
+                    help="Model family used to pick the default --checkpoint.")
     ap.add_argument("--checkpoint", default=None,
                     help="Default: <script-dir>/<model-family>/validation_t1/<model-family>_t1.pt.")
     ap.add_argument("--output-dir", default=None,
@@ -121,10 +95,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--start-mode",
         choices=["cold", "warm", "both"],
         default="both",
-        help=(
-            "cold seeds the synthetic flat window MPC uses at deployment. warm seeds "
-            "the run's first real rows. both scores each separately."
-        ),
+        help="Seed each replay from a synthetic window (cold), the run's first real rows (warm), or both.",
     )
 
     # --- Horizon mode ------------------------------------------------------------
@@ -217,11 +188,7 @@ def describe_trajectory(
 
 def trajectory_cost(times: np.ndarray, temps: np.ndarray, target: float,
                     args: argparse.Namespace) -> float | None:
-    """Tail cost used to rank PID candidates, computed the same way for both curves.
-
-    None when the trajectory never reaches the entry band, rather than the caller's
-    large sentinel, so it stays out of the aggregates.
-    """
+    """Tail cost used to rank PID candidates, or None if the entry band is never reached."""
     frame = pd.DataFrame({"timestamp": times, "temp": temps, "temp_ref": target})
     info = compute_tail_cost(frame, entry_band=args.entry_band,
                              overshoot_weight=args.overshoot_weight)
@@ -336,13 +303,7 @@ def pid_driven_start(
     ki: float,
     kd: float,
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Seed window and controller terms for when no real telemetry exists at all --
-    an offline what-if prediction with no chamber run behind it.
-
-    Holds temperature at start_temp while stepping a real ChamberPID/CodesysDiff
-    forward for window_steps ticks, so the seeded control terms reflect how long
-    that error has actually been sitting.
-    """
+    """Build a seed window and controller terms by stepping the chamber PID at a held start temperature."""
     pid = ChamberPID()
     diff = CodesysDiff()
     diff.prev_value = start_temp
@@ -382,12 +343,7 @@ def simulate_twin(
     warm_window: np.ndarray | None = None,
     warm_terms: dict[str, float] | None = None,
 ) -> pd.DataFrame:
-    """Run the twin closed-loop for a whole run through the deployed MPC step path.
-
-    pid_schedule supplies (kp, ki, kd) per step, so replayed runs keep the gain
-    switching the chamber actually used. warm_window seeds the feature window from
-    real rows; without it, seeding falls back to pid_driven_start.
-    """
+    """Run the twin closed-loop over a whole run with a per-step PID schedule."""
     feature_scale = max(abs(float(args.control_feature_scale)), 1e-9)
     total_steps = max(1, int(round(float(duration_s) / float(dt_s))))
     kp0, ki0, kd0 = pid_schedule[0]
@@ -506,8 +462,7 @@ def warm_start_at(
     window_steps: int,
     offset: int,
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Feature window and controller terms as of a real row, for seeding the twin
-    from that point instead of the synthetic flat window MPC starts a run with."""
+    """Feature window and controller terms as of a real row, for warm-starting the twin."""
     warm_window = df.iloc[offset - window_steps + 1 : offset + 1][list(feature_names)].to_numpy(np.float32)
     warm_terms = {c: float(df[c].iloc[offset]) for c in ("temp_u_p", "temp_u_i", "temp_u_d")}
     return warm_window, warm_terms
@@ -613,7 +568,7 @@ def run_replay_mode(session_dir: Path, *, model, checkpoint, feature_names, wind
 
 
 # -----------------------------------------------------------------------------
-# Horizon mode -- how far ahead a prediction from any point in a run can be trusted
+# Horizon mode
 # -----------------------------------------------------------------------------
 
 
@@ -636,8 +591,7 @@ def horizon_samples_for_run(
     device: torch.device,
     args: argparse.Namespace,
 ) -> list[dict[str, object]]:
-    """Lookahead error at each --lookahead-marks-s from every sampled start point
-    in one run. One record per (start point, mark)."""
+    """Lookahead error at each --lookahead-marks-s from every sampled start point in one run."""
     elapsed = df["elapsed_s"].to_numpy(dtype=float)
     temps = df["temp"].to_numpy(dtype=float)
     dt_s = float(np.median(np.diff(elapsed))) if len(elapsed) > 1 else 2.0
@@ -720,8 +674,7 @@ def aggregate_horizon(rows: pd.DataFrame, group_cols: list[str], trust_band: flo
 
 
 def trust_horizon(curve: pd.DataFrame) -> float | None:
-    """Longest lookahead, in ascending mark order, before the curve first fails
-    trust (p90 error over threshold, or any divergence)."""
+    """Longest lookahead before the curve first fails the p90 or divergence check."""
     curve = curve.sort_values("lookahead_s")
     ok = curve["p90_trusted"] & (curve["diverged_fraction"] == 0.0)
     if ok.all():

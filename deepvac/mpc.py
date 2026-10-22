@@ -1,12 +1,4 @@
-"""Model-predictive-control rollout and CEM/random-shooting optimizer.
-
-The plant model and the cost design are supplied by the caller:
-
-predict_fn signature:  (model, checkpoint, feature_window, device) -> float
-cost_fn signature:     (*, temps, candidate_pid, previous_pid, start_temp,
-                         target_temp, valid, args) -> Dict[str, float]
-                        (must include a "cost" key)
-"""
+"""Model-predictive-control rollout and CEM/random-shooting PID optimizer."""
 
 from __future__ import annotations
 
@@ -23,7 +15,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-# Physical PID/differentiator emulation, shared by the GRU and LSTM schedulers.
 from digitaltwin.common import ChamberPID, CodesysDiff
 
 from deepvac.pid import clip_pid, pid_bounds
@@ -38,8 +29,8 @@ class SimState:
     temp: float
     previous_temp: float
     feature_window: np.ndarray
-    pid: Any  # digitaltwin.common.ChamberPID
-    diff: Any  # digitaltwin.common.CodesysDiff
+    pid: ChamberPID
+    diff: CodesysDiff
     kp: float
     ki: float
     kd: float
@@ -55,15 +46,12 @@ class CandidateTable:
 
 
 def add_common_mpc_args(ap: argparse.ArgumentParser) -> None:
-    """Flags shared verbatim by mpc_gru.py and mpc_lstm.py's parsers. Each
-    script still builds its own parser (checkpoint defaults, horizon/hold
-    defaults, and cost weights differ) and calls this to add the rest."""
+    """Add the MPC flags shared by the scheduler scripts."""
     ap.add_argument("--start-temp", type=float, default=27.0)
     ap.add_argument("--target-temp", type=float, default=0.0)
     ap.add_argument("--duration-s", type=float, default=1200.0)
     ap.add_argument("--dt-s", type=float, default=2.0, help="Model/logging step in seconds.")
-    ap.add_argument("--precondition-ref", type=float, default=None,
-                    help="Unused. Kept so existing invocations still parse.")
+    ap.add_argument("--precondition-ref", type=float, default=None)
 
     ap.add_argument("--window-steps", type=int, default=60,
                     help="Fallback only if checkpoint lacks window_steps.")
@@ -76,9 +64,9 @@ def add_common_mpc_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--ki-max", type=float, default=1000.0)
     ap.add_argument("--kd-min", type=float, default=1.0)
     ap.add_argument("--kd-max", type=float, default=20.0)
-    ap.add_argument("--kp-init", type=float, default=6.0)
-    ap.add_argument("--ki-init", type=float, default=997.0)
-    ap.add_argument("--kd-init", type=float, default=16.0)
+    ap.add_argument("--kp-init", type=float, default=25.0)
+    ap.add_argument("--ki-init", type=float, default=500.0)
+    ap.add_argument("--kd-init", type=float, default=10.0)
     ap.add_argument("--initial-i", type=float, default=0.0, help="Initial normalized I state, not percent.")
     ap.add_argument("--initial-d", type=float, default=0.0, help="Initial normalized D state, not percent.")
     ap.add_argument("--initial-p", type=float, default=0.0, help="Initial normalized P state, not percent.")
@@ -90,7 +78,7 @@ def add_common_mpc_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--pid-period-s", type=float, default=0.1)
 
     ap.add_argument("--optimizer", choices=["cem", "random"], default="cem")
-    ap.add_argument("--cem-population", type=int, default=256)
+    ap.add_argument("--cem-population", type=int, default=4096)
     ap.add_argument("--cem-elite-frac", type=float, default=0.12)
     ap.add_argument("--cem-iterations", type=int, default=3)
     ap.add_argument("--cem-min-std-frac", type=float, default=0.03,
@@ -113,7 +101,6 @@ def add_common_mpc_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--history-time-scale", type=float, default=600.0)
     ap.add_argument("--history-velocity-scale", type=float, default=0.2)
 
-    # --w-near-std is added by each scheduler script; the defaults differ.
     ap.add_argument("--w-invalid", type=float, default=1_000_000.0)
 
     ap.add_argument("--tail-window-s", type=float, default=300.0)
@@ -180,10 +167,7 @@ def initialize_feature_window(
     ki: float,
     kd: float,
 ) -> np.ndarray:
-    """Flat placeholder window: constant temperature, zero control terms.
-
-    Prefer initialize_feature_window_from_pid, which is a drop-in replacement.
-    """
+    """Build a feature window at a constant temperature with zero control terms."""
     rows = []
     for _ in range(window_steps):
         rows.append(make_feature_row(
@@ -213,17 +197,7 @@ def initialize_feature_window_from_pid(
     ki: float,
     kd: float,
 ) -> np.ndarray:
-    """Seed window for when no real telemetry is available: MPC's very first
-    decision, or an offline prediction for a candidate PID with no chamber run
-    behind it.
-
-    Holds temperature at start_temp while stepping a real ChamberPID/CodesysDiff
-    forward for window_steps ticks, so the seeded control terms reflect how long
-    that error has actually been sitting.
-
-    target_temp must be the run's actual upcoming setpoint, not start_temp: an
-    idle-to-idle error of ~0 builds no integrator state.
-    """
+    """Build a seed feature window by stepping the chamber PID at a held start temperature."""
     pid = ChamberPID()
     diff = CodesysDiff()
     diff.prev_value = start_temp
@@ -606,8 +580,8 @@ def inject_seed_candidates(
 
 def overshoot_array(temps: np.ndarray, *, start_temp: float, target_temp: float) -> np.ndarray:
     if target_temp <= start_temp:
-        return np.maximum(target_temp - temps, 0.0)  # cooling: below target
-    return np.maximum(temps - target_temp, 0.0)      # heating: above target
+        return np.maximum(target_temp - temps, 0.0)
+    return np.maximum(temps - target_temp, 0.0)
 
 
 def rollout_constant_pid(
@@ -623,7 +597,6 @@ def rollout_constant_pid(
     predict_fn: PredictFn,
     cost_fn: CostFn,
 ) -> tuple[dict[str, float], list[float]]:
-    # Deep-copied so horizon rollouts do not mutate the real simulation state.
     state = copy.deepcopy(initial_state)
     pid_vec = clip_pid(candidate_pid, args)
     state.kp, state.ki, state.kd = float(pid_vec[0]), float(pid_vec[1]), float(pid_vec[2])
@@ -684,6 +657,21 @@ def sample_candidates_random(
     return np.clip(samples, lo, hi)
 
 
+def population_summary(evaluated_rows: Sequence[dict[str, float]]) -> dict[str, object]:
+    """Mean/median cost of an evaluated population and the candidate PIDs that represent them."""
+    ranked = sorted(evaluated_rows, key=lambda r: float(r["cost"]))
+    costs = np.asarray([float(r["cost"]) for r in ranked], dtype=float)
+    mean_cost = float(np.mean(costs))
+    median_row = ranked[len(ranked) // 2]
+    mean_row = ranked[int(np.argmin(np.abs(costs - mean_cost)))]
+    return {
+        "population_mean_cost": mean_cost,
+        "population_median_cost": float(np.median(costs)),
+        "population_mean_pid": (float(mean_row["kp"]), float(mean_row["ki"]), float(mean_row["kd"])),
+        "population_median_pid": (float(median_row["kp"]), float(median_row["ki"]), float(median_row["kd"])),
+    }
+
+
 def optimize_pid_for_state(
     *,
     state: SimState,
@@ -711,7 +699,6 @@ def optimize_pid_for_state(
         candidate_table=candidate_table,
     )
 
-    # Current PID baseline, used both for comparison and safety gating.
     progress_t0 = time.perf_counter()
     if progress_enabled:
         print(
@@ -768,28 +755,29 @@ def optimize_pid_for_state(
                 best_cost_so_far = float(metrics["cost"])
                 best_pid_so_far = np.asarray([metrics["kp"], metrics["ki"], metrics["kd"]], dtype=float)
             if progress_enabled and progress_every > 0 and ((i + 1) % progress_every == 0 or i + 1 == len(samples)):
-                elapsed_ms = 1000.0 * (time.perf_counter() - progress_t0)
+                elapsed_s = time.perf_counter() - progress_t0
                 print(
                     f"[decision {decision_label}] random {i + 1}/{len(samples)} "
                     f"best={best_cost_so_far:.4f} "
                     f"pid=({best_pid_so_far[0]:.0f}, {best_pid_so_far[1]:.0f}, {best_pid_so_far[2]:.0f}) "
-                    f"elapsed={elapsed_ms:.0f}ms",
+                    f"elapsed={elapsed_s:.2f}s",
                     flush=True,
                 )
     else:
-        # CEM initialization around the current PID, but broad enough to explore.
-        mean = np.clip(current_pid, lo, hi)
-        std = 0.40 * (hi - lo)
         min_std = np.maximum(float(args.cem_min_std_frac) * (hi - lo), 1e-9)
         elite_n = max(2, int(round(population * float(args.cem_elite_frac))))
         total_iters = max(1, int(args.cem_iterations))
+        mean = std = None
 
         for cem_iter in range(total_iters):
             iter_t0 = time.perf_counter()
-            samples = rng.normal(loc=mean, scale=std, size=(population, 3))
-            samples = np.clip(samples, lo, hi)
-            samples = np.floor(samples + 0.5)
-            samples = np.clip(samples, lo, hi)
+            if cem_iter == 0:
+                samples = sample_candidates_random(rng, population, args, center=None)
+            else:
+                samples = rng.normal(loc=mean, scale=std, size=(population, 3))
+                samples = np.clip(samples, lo, hi)
+                samples = np.floor(samples + 0.5)
+                samples = np.clip(samples, lo, hi)
             seed_start = 0
             if bool(args.include_current_candidate):
                 samples[0, :] = current_pid
@@ -819,12 +807,12 @@ def optimize_pid_for_state(
                     best_cost_so_far = float(metrics["cost"])
                     best_pid_so_far = np.asarray([metrics["kp"], metrics["ki"], metrics["kd"]], dtype=float)
                 if progress_enabled and progress_every > 0 and ((i + 1) % progress_every == 0 or i + 1 == len(samples)):
-                    elapsed_ms = 1000.0 * (time.perf_counter() - progress_t0)
+                    elapsed_s = time.perf_counter() - progress_t0
                     print(
                         f"[decision {decision_label}] cem {cem_iter + 1}/{total_iters} "
                         f"{i + 1}/{len(samples)} best={best_cost_so_far:.4f} "
                         f"pid=({best_pid_so_far[0]:.0f}, {best_pid_so_far[1]:.0f}, {best_pid_so_far[2]:.0f}) "
-                        f"elapsed={elapsed_ms:.0f}ms",
+                        f"elapsed={elapsed_s:.2f}s",
                         flush=True,
                     )
 
@@ -834,14 +822,14 @@ def optimize_pid_for_state(
             std = np.maximum(np.std(elites, axis=0), min_std)
             evaluated_rows.extend(iter_rows)
             if progress_enabled:
-                iter_ms = 1000.0 * (time.perf_counter() - iter_t0)
+                iter_s = time.perf_counter() - iter_t0
                 iter_best = iter_rows[0]
                 print(
                     f"[decision {decision_label}] cem {cem_iter + 1}/{total_iters} done "
                     f"best={float(iter_best['cost']):.4f} "
                     f"pid=({float(iter_best['kp']):.0f}, {float(iter_best['ki']):.0f}, {float(iter_best['kd']):.0f}) "
                     f"next_mean=({mean[0]:.1f}, {mean[1]:.1f}, {mean[2]:.1f}) "
-                    f"iter={iter_ms:.0f}ms",
+                    f"iter={iter_s:.2f}s",
                     flush=True,
                 )
 
@@ -849,19 +837,8 @@ def optimize_pid_for_state(
     population_costs = np.asarray([float(r["cost"]) for r in evaluated_rows], dtype=float)
     best = dict(evaluated_rows[0])
     best_pid = np.asarray([best["kp"], best["ki"], best["kd"]], dtype=float)
+    population = population_summary(evaluated_rows)
 
-    # Representative PID triplets for the population's mean/median cost, so callers
-    # can roll these out and score them on the same footing as best/PPO instead of
-    # only knowing the aggregate cost number. Median uses the middle-ranked candidate
-    # (evaluated_rows is cost-sorted); mean uses the candidate closest to the mean
-    # cost, since no single candidate's cost equals the mean exactly.
-    mean_cost = float(np.mean(population_costs))
-    median_row = evaluated_rows[len(evaluated_rows) // 2]
-    mean_row = evaluated_rows[int(np.argmin(np.abs(population_costs - mean_cost)))]
-    population_mean_pid = (float(mean_row["kp"]), float(mean_row["ki"]), float(mean_row["kd"]))
-    population_median_pid = (float(median_row["kp"]), float(median_row["ki"]), float(median_row["kd"]))
-
-    # Safety gate: keep current PID unless improvement is meaningful.
     if float(best["cost"]) >= current_cost - float(args.apply_margin):
         best = dict(current_metrics)
         best["kp"] = float(current_pid[0])
@@ -875,17 +852,14 @@ def optimize_pid_for_state(
     best["n_evaluated"] = int(len(evaluated_rows))
     best["horizon_steps"] = int(horizon_steps)
     best["n_history_candidates"] = int(len(history_candidates))
-    best["population_mean_cost"] = mean_cost
-    best["population_median_cost"] = float(np.median(population_costs))
-    best["population_mean_pid"] = population_mean_pid
-    best["population_median_pid"] = population_median_pid
+    best.update(population)
     if progress_enabled:
-        total_ms = 1000.0 * (time.perf_counter() - progress_t0)
+        total_s = time.perf_counter() - progress_t0
         print(
             f"[decision {decision_label}] selected "
             f"pid=({float(best['kp']):.0f}, {float(best['ki']):.0f}, {float(best['kd']):.0f}) "
             f"cost={float(best['cost']):.4f} changed={bool(best['changed'])} "
-            f"evaluated={int(best['n_evaluated'])} total={total_ms:.0f}ms",
+            f"evaluated={int(best['n_evaluated'])} total={total_s:.2f}s",
             flush=True,
         )
     return best
@@ -954,6 +928,8 @@ def run_mpc_simulation(
     cost_fn: CostFn,
     candidate_table: CandidateTable | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
+    from deepvac.mpc_batch import optimize_pid_batched
+
     rng = np.random.default_rng(int(args.seed))
 
     start_temp = float(args.start_temp)
@@ -1004,7 +980,7 @@ def run_mpc_simulation(
     while step < total_steps:
         decision_idx += 1
         t0 = time.perf_counter()
-        decision = optimize_pid_for_state(
+        decision = optimize_pid_batched(
             state=state,
             model=model,
             checkpoint=checkpoint,
@@ -1012,12 +988,12 @@ def run_mpc_simulation(
             device=device,
             args=args,
             rng=rng,
-            predict_fn=predict_fn,
             cost_fn=cost_fn,
             candidate_table=candidate_table,
             decision_idx=decision_idx,
+            time_budget_s=float(args.mpc_hold_s),
         )
-        optimize_ms = 1000.0 * (time.perf_counter() - t0)
+        optimize_s = time.perf_counter() - t0
 
         old_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
         new_pid = clip_pid(np.asarray([decision["kp"], decision["ki"], decision["kd"]], dtype=float), args)
@@ -1040,13 +1016,15 @@ def run_mpc_simulation(
             "n_evaluated": int(decision["n_evaluated"]),
             "n_history_candidates": int(decision.get("n_history_candidates", 0)),
             "horizon_steps": int(decision["horizon_steps"]),
-            "optimize_ms": float(optimize_ms),
+            "optimize_seconds": float(optimize_s),
         }
-        # Only the horizon_* / pid_change_norm keys this cost_fn produced.
         for optional_key in (
             "horizon_overshoot_max",
             "horizon_overshoot_rmse",
             "horizon_mae",
+            "horizon_approach_error",
+            "horizon_settle_std",
+            "horizon_settle_error",
             "horizon_final_abs_error",
             "horizon_weighted_motion",
             "horizon_mean_abs_velocity",
@@ -1064,7 +1042,7 @@ def run_mpc_simulation(
                 f"pid=({state.kp:7.3f}, {state.ki:8.3f}, {state.kd:7.3f}) "
                 f"cost={float(decision['cost']):9.4f} "
                 f"os={float(decision.get('horizon_overshoot_max', 0.0)):7.4f} "
-                f"eval={int(decision['n_evaluated'])} time={optimize_ms:7.1f}ms"
+                f"eval={int(decision['n_evaluated'])} time={optimize_s:7.2f}s"
             )
 
         for _ in range(hold_steps):

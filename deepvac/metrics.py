@@ -10,9 +10,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.preprocessing import StandardScaler
 
-from deepvac.pid import (
-    parse_bounds,  # noqa: F401  (re-exported for callers migrating off bo_common)
-)
+from deepvac.pid import parse_bounds  # noqa: F401
 
 
 def normal_pdf(z: np.ndarray) -> np.ndarray:
@@ -25,9 +23,7 @@ def normal_cdf(z: np.ndarray) -> np.ndarray:
 
 
 def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: float = 0.01) -> np.ndarray:
-    """High EI: predicted cost below the current best, with enough uncertainty
-    that the candidate is still worth testing. `y_best` is the lowest observed
-    cost so far; `mu`/`sigma` are the GP's predicted cost and its uncertainty."""
+    """Expected improvement of each candidate over the lowest observed cost."""
     sigma_safe = np.maximum(sigma, 1e-12)
     improvement = y_best - mu - xi
     z = improvement / sigma_safe
@@ -37,14 +33,12 @@ def expected_improvement(mu: np.ndarray, sigma: np.ndarray, y_best: float, xi: f
 
 
 def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> np.ndarray:
-    """Low LCB: candidate with low predicted cost and high uncertainty."""
+    """Lower confidence bound of each candidate's predicted cost."""
     return mu - kappa * sigma
 
 
 def expected_information_gain(sigma: np.ndarray) -> np.ndarray:
-    """Candidates with larger predictive uncertainty are expected to teach the
-    model more. The additive entropy constant doesn't affect ranking, but
-    keeping the full Gaussian entropy makes the logged score interpretable."""
+    """Gaussian predictive entropy of each candidate."""
     sigma_safe = np.maximum(sigma, 1e-12)
     return 0.5 * np.log(2.0 * np.pi * np.e * np.square(sigma_safe))
 
@@ -144,10 +138,7 @@ def compute_tail_cost(
     entry_band: float = 2.0,
     overshoot_weight: float = 10.0,
 ) -> dict:
-    """Compute tail cost after first entering a target band.
-
-    cost = tail_mae + overshoot_weight * overshoot^2
-    """
+    """Compute tail MAE plus weighted squared overshoot after first entering the target band."""
     required = {"timestamp", "temp", "temp_ref"}
     missing = required - set(df.columns)
     if missing:
@@ -160,7 +151,6 @@ def compute_tail_cost(
     target = float(temp_ref[0])
     start_temp = float(temp[0])
 
-    # 1 for cooling, -1 for heating
     direction = 1.0 if start_temp > target else -1.0
 
     abs_err = np.abs(temp - target)

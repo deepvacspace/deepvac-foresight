@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Train a PPO policy network for real-time PID control against the digital twin.
-
-Reward is -horizon_cost() (advisor/advise_pid.py) over each --mpc-hold-s segment,
-accumulated with GAE across the episode.
-
-Example:
-
-    python -m advisor.train_policy_ppo --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt
-"""
+"""Train a PPO policy network for real-time PID control against the digital twin."""
 
 from __future__ import annotations
 
@@ -54,7 +46,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.set_defaults(target_temp=0.0)
 
     ap.add_argument("--reward-scale", type=float, default=0.01,
-                    help="Multiplier applied to the terminal horizon_cost() before it becomes reward.")
+                    help="Multiplier on the terminal horizon_cost() reward.")
     ap.add_argument("--shaping-coef", type=float, default=0.02,
                     help="Weight of the dense per-segment tracking-error and control-change reward.")
     ap.add_argument("--n-envs", type=int, default=256)
@@ -70,8 +62,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--min-std", type=float, default=0.05,
                     help="Floor on the policy's action std, in normalized [-1,1] action space.")
     ap.add_argument("--overshoot-shaping-coef", type=float, default=1.0,
-                    help="Weight of a dense per-segment penalty on crossing past target_temp in "
-                         "the overshoot direction (deepvac.mpc.overshoot_array).")
+                    help="Weight of the dense per-segment overshoot penalty.")
     ap.add_argument("--value-coef", type=float, default=0.5)
     ap.add_argument("--max-grad-norm", type=float, default=0.5)
     ap.add_argument("--hidden-dim", type=int, default=64)
@@ -80,9 +71,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--eval-envs", type=int, default=64)
 
     ap.add_argument("--tensorboard", action=argparse.BooleanOptionalAction, default=True,
-                    help="Log scalars to TensorBoard. Requires the tensorboard package.")
+                    help="Log scalars to TensorBoard.")
     ap.add_argument("--tensorboard-dir", default=None,
-                    help="Default: --output-dir/tensorboard/<timestamp>.")
+                    help="TensorBoard log directory.")
 
     return ap
 
@@ -107,7 +98,7 @@ def setup_tensorboard(args: argparse.Namespace, output_dir: Path):
 
 
 OBS_DIM = 8
-DIFF_CLIP = 5.0  # matches digitaltwin.common.CodesysDiff / deepvac.mpc_batch._DIFF_CLIP
+DIFF_CLIP = 5.0
 
 
 def mlp(input_dim: int, hidden_dim: int, num_layers: int, output_dim: int, output_activation: nn.Module | None) -> nn.Sequential:
@@ -123,9 +114,7 @@ def mlp(input_dim: int, hidden_dim: int, num_layers: int, output_dim: int, outpu
 
 
 class ActorCritic(nn.Module):
-    """Gaussian actor-critic over the 3 PID gains. actor_mean returns the raw,
-    unbounded pre-squash mean; callers apply tanh() once to get the [-1, 1]
-    action."""
+    """Gaussian actor-critic over the 3 PID gains."""
 
     def __init__(self, hidden_dim: int, num_layers: int, min_std: float = 0.05) -> None:
         super().__init__()
@@ -158,10 +147,7 @@ class ActorCritic(nn.Module):
 
 
 class VecTwinEnv:
-    """N parallel episodes stepped through the digital twin at once, one RL step per
-    --mpc-hold-s segment. Auto-resets envs individually when an episode ends or
-    a candidate's rollout goes invalid.
-    """
+    """Parallel episodes stepped through the digital twin, one RL step per --mpc-hold-s segment."""
 
     def __init__(self, args: argparse.Namespace, model, checkpoint: dict[str, object], device: torch.device, n_envs: int, seed: int) -> None:
         self.args = args
@@ -233,7 +219,7 @@ class VecTwinEnv:
         self.episode_start_pid[idx] = np.stack([kp, ki, kd], axis=1)
 
     def _obs(self) -> np.ndarray:
-        """Builds the policy's 8-dim observation vector for every env."""
+        """Build the policy's 8-dim observation for every env."""
         scale = max(abs(self.args.temp_min), abs(self.args.temp_max), 1e-6)
         velocity = (self.temp - self.previous_temp) / max(self.dt_s, 1e-9)
         i_scale = max(abs(float(self.args.u_min)), abs(float(self.args.u_max)), 1e-6)
@@ -253,10 +239,7 @@ class VecTwinEnv:
         return self._obs()
 
     def step(self, action_normalized: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, np.ndarray]]:
-        """Advances --mpc-hold-s worth of twin steps holding the rescaled PID
-        (action_normalized in [-1, 1]^3) fixed. Reward is a dense per-segment
-        tracking term plus horizon_cost() over the whole episode on the
-        terminal segment."""
+        """Advance one --mpc-hold-s segment with the normalized PID action held fixed."""
         prev_step_idx = self.step_idx.copy()
         pid = self.lo + (np.clip(action_normalized, -1.0, 1.0) + 1.0) / 2.0 * (self.hi - self.lo)
         pid = clip_pid(pid, self.args)
@@ -440,7 +423,7 @@ def ppo_update(
 
 
 def evaluate_policy(env: VecTwinEnv, model: ActorCritic, device: torch.device) -> dict[str, float]:
-    """Runs env.episode_steps deterministic steps and returns mean episode cost."""
+    """Run one deterministic episode and return the mean episode cost."""
     obs = env.obs()
     for _ in range(env.episode_steps):
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device)

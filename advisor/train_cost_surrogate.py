@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""Train an MLP cost surrogate for CEM candidate screening.
-
-Predicts a candidate PID's rollout cost directly from a state
-(temp, current_pid, candidate_pid), instead of simulating the digital twin.
-
-1. Generate a labeled dataset: sample (temp, current_pid) states, score
-   candidate PIDs per state via deepvac.mpc_batch.rollout_population and
-   advisor.advise_pid.horizon_cost.
-2. Train a small MLP (advisor/cost_surrogate.py) to regress cost, then report
-   rank correlation and top-K% screening hit rate against true cost on
-   held-out states.
-
---target-normalization: normalize cost within each state before training.
---candidate-sampling: how candidate PIDs are drawn per state -- uniform,
-cem (replays deepvac.mpc.optimize_pid_for_state's mean/std elite-update
-trajectory via batched rollouts), or both mixed.
---optuna-trials: sweep hidden_dim/num_layers/dropout/batch_size/lr/
-weight_decay/huber_beta via Optuna, reusing one generated/loaded dataset.
-
-Scoped to one --target-temp and one horizon (--mpc-horizon-s/--dt-s), the
-same horizon advisor/advise_pid.py must be run with.
-
-Example:
-
-    python -m advisor.train_cost_surrogate --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt
-"""
+"""Train an MLP cost surrogate that screens PID candidates before CEM."""
 
 from __future__ import annotations
 
@@ -77,21 +52,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--temp-max", type=float, default=26.0)
     ap.add_argument("--n-states", type=int, default=300)
     ap.add_argument("--n-candidates-per-state", type=int, default=300,
-                    help="Candidates drawn uniformly per state. Used as-is for "
-                         "--candidate-sampling uniform/mixed; ignored for cem (which uses "
-                         "--cem-population x --cem-iterations instead).")
+                    help="Uniformly drawn candidates per state.")
     ap.add_argument(
         "--candidate-sampling", choices=["uniform", "cem", "mixed"], default="mixed",
-        help="How each state's candidate PIDs are drawn: uniform across the kp/ki/kd bounds, "
-             "cem (replays the CEM elite-update trajectory, --cem-population x --cem-iterations "
-             "rollouts per state), or both.",
+        help="How each state's candidate PIDs are drawn.",
     )
 
     ap.add_argument(
         "--target-normalization", choices=["none", "center", "zscore"], default="zscore",
-        help="Normalize cost within each state before training: 'center' subtracts the "
-             "state's median cost, 'zscore' also divides by the state's cost std, 'none' "
-             "trains on raw cost.",
+        help="Per-state cost normalization applied before training.",
     )
     ap.add_argument("--hidden-dim", type=int, default=64)
     ap.add_argument("--num-layers", type=int, default=2)
@@ -108,21 +77,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument(
         "--optuna-trials", type=int, default=0,
-        help="Sweep hidden_dim/num_layers/dropout/batch_size/lr/weight_decay/huber_beta with "
-             "this many Optuna trials instead of using the CLI values directly. 0 disables. "
-             "The dataset is generated/loaded once and reused across all trials.",
+        help="Number of Optuna hyperparameter trials (0 disables).",
     )
     ap.add_argument("--optuna-epochs", type=int, default=30,
-                    help="Max epochs per Optuna trial. The final pass still trains for --epochs.")
+                    help="Max epochs per Optuna trial.")
     ap.add_argument("--optuna-timeout-s", type=float, default=None,
-                    help="Stop starting new trials after this many seconds. Default: no timeout.")
+                    help="Stop starting new trials after this many seconds.")
     ap.add_argument(
         "--optuna-pruner", choices=["median", "none"], default="median",
         help="Prune weak trials early based on val_mae.",
     )
     ap.add_argument("--optuna-storage", default=None,
-                    help="Optuna storage URL, e.g. sqlite:///output_dir/optuna.db, letting a "
-                         "study resume across interrupted runs. Default: in-memory, one-shot.")
+                    help="Optuna storage URL for a resumable study (default: in-memory).")
 
     return ap
 
@@ -137,10 +103,7 @@ def sample_cem_like_results(
     state_args: argparse.Namespace,
     horizon_steps: int,
 ) -> list[dict[str, float]]:
-    """Score one state's candidates using deepvac.mpc.optimize_pid_for_state's
-    CEM mean/std elite-update trajectory, scored via one batched
-    rollout_population call per iteration instead of one candidate at a time.
-    """
+    """Score one state's candidates along a CEM elite-update trajectory."""
     lo, hi = pid_bounds(state_args)
     current_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
     mean = np.clip(current_pid, lo, hi)
@@ -244,8 +207,7 @@ def split_by_state(df: pd.DataFrame, val_fraction: float, seed: int) -> np.ndarr
 
 
 def add_state_normalized_target(df: pd.DataFrame, method: str) -> pd.DataFrame:
-    """Add a `cost_target` column: cost normalized within each state.
-    A no-op copy when method == "none"."""
+    """Add a cost_target column with cost normalized within each state."""
     df = df.copy()
     if method == "none":
         df["cost_target"] = df["cost"]
@@ -410,8 +372,7 @@ def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namesp
 def run_optuna(
     args: argparse.Namespace, df: pd.DataFrame, device: torch.device,
 ) -> argparse.Namespace:
-    """Search hyperparameters against the already-generated/loaded dataset, and
-    return an args namespace carrying the best trial's values."""
+    """Search hyperparameters with Optuna and return args carrying the best trial's values."""
     try:
         import optuna
     except ImportError as exc:
@@ -527,8 +488,9 @@ def main() -> None:
         "cost_weights": {
             "w_overshoot_max": final_args.w_overshoot_max, "w_overshoot_rmse": final_args.w_overshoot_rmse,
             "w_abs_error": final_args.w_abs_error, "w_final_abs_error": final_args.w_final_abs_error,
-            "w_near_std": final_args.w_near_std, "w_control_change": final_args.w_control_change,
-            "near_band": final_args.near_band,
+            "w_near_std": final_args.w_near_std, "w_tail_std": final_args.w_tail_std,
+            "w_control_change": final_args.w_control_change,
+            "near_band": final_args.near_band, "tail_window_s": final_args.tail_window_s,
         },
     }, checkpoint_path)
 

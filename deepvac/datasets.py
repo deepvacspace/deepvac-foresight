@@ -1,6 +1,4 @@
-"""Run-history discovery, sequence building, scaling, and plotting for the
-one-step GRU/LSTM plant models.
-"""
+"""Run-history discovery, sequence building, scaling, and plotting for the one-step plant models."""
 
 from __future__ import annotations
 

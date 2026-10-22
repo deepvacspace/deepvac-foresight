@@ -1,36 +1,5 @@
 #!/usr/bin/env python3
-"""Predict how a candidate PID would run, without running it.
-
-No chamber connection and no run history are required -- only a trained checkpoint
-and the candidate you want to try:
-
-    python -m digitaltwin.predict_run --kp 6 --ki 997 --kd 16
-
-That holds one triplet for the whole run and seeds the model's starting window with
-digitaltwin.twin_acceptance.pid_driven_start: a settled chamber's temperature held
-constant while a real ChamberPID/CodesysDiff is stepped forward, so the seeded
-control terms reflect how long the error has actually been sitting rather than
-assuming a controller that has produced exactly zero output the whole time.
-Validated on 8 held-out historical runs at ~1.3 degC median whole-run MAE, versus
-~4.9 degC for the flat zero-control window and ~0.8 degC for a real warm start
-(see that function's docstring, and digitaltwin/twin_acceptance.py --mode replay
---start-mode cold/warm).
-
-If a real run_samples.csv is available -- your own past run, or any run recorded
-near the same starting condition -- pass --context-csv to warm-start from it
-instead. That is strictly more accurate; a warm start from a genuinely unrelated
-run is not, and can be worse than the no-telemetry estimate (see
-digitaltwin/twin_acceptance.py's module docstring for the measurement).
-
---model-family only picks the default --checkpoint when --checkpoint isn't
-passed explicitly; the model actually used is always whichever family the
-checkpoint itself is stamped with.
-
-Example, warm-started from a real run:
-
-    python -m digitaltwin.predict_run --kp 6 --ki 997 --kd 16 \
-        --context-csv experiments/run_history/run_1776723160_994c5aad/run_samples.csv
-"""
+"""Predict a whole-run trajectory for a candidate PID with the digital twin, without running the chamber."""
 
 from __future__ import annotations
 
@@ -67,7 +36,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default="gru",
-                    help="Only used to pick the default --checkpoint below.")
+                    help="Model family used to pick the default --checkpoint.")
     ap.add_argument("--checkpoint", default=None,
                     help="Default: <script-dir>/<model-family>/validation_t1/<model-family>_t1.pt.")
     ap.add_argument("--output-dir", default=None,
@@ -87,11 +56,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument(
         "--context-csv", default=None,
-        help="A real run_samples.csv to warm-start from instead of the no-telemetry estimate.",
+        help="Real run_samples.csv to warm-start from.",
     )
     ap.add_argument(
         "--context-offset", type=int, default=None,
-        help="Row offset into --context-csv to seed from. Default: window_steps - 1 (that run's own start).",
+        help="Row offset into --context-csv.",
     )
 
     ap.add_argument("--pid-period-s", type=float, default=0.1)
@@ -111,11 +80,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def load_context(args: argparse.Namespace, feature_names: list, window_steps: int):
-    """Real warm-start window/terms from --context-csv, or None to fall back to the
-    no-telemetry PID-driven estimate."""
+    """Load a warm-start window and terms from --context-csv, if given."""
     if not args.context_csv:
-        return None, None, ("no real telemetry: cold PID-driven estimate "
-                            "(~1.3 degC median whole-run MAE on held-out validation)")
+        return None, None, "no real telemetry: cold PID-driven estimate"
 
     loader_args = argparse.Namespace(min_samples=1, min_duration_s=0.0)
     df, _ = prepare_run_dataframe(Path(args.context_csv), loader_args)
@@ -125,9 +92,7 @@ def load_context(args: argparse.Namespace, feature_names: list, window_steps: in
             f"--context-offset must be in [{window_steps - 1}, {len(df) - 1}] for this CSV, got {offset}"
         )
     window, terms = warm_start_at(df, feature_names, window_steps, offset)
-    note = (f"warm-started from real telemetry: {args.context_csv} @ row {offset} "
-            "(~0.35-0.8 degC median whole-run MAE when representative of the actual "
-            "starting condition; worse if the context is from an unrelated situation)")
+    note = f"warm-started from real telemetry: {args.context_csv} @ row {offset}"
     return window, terms, note
 
 

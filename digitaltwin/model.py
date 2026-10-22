@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from deepvac.models import SequenceDataset  # noqa: F401  (re-exported for callers)
+from deepvac.models import SequenceDataset  # noqa: F401
 
 
 class LayerNormLSTMCell(nn.Module):
@@ -34,8 +34,7 @@ class LayerNormLSTMCell(nn.Module):
 
 
 class LayerNormLSTM(nn.Module):
-    """Multi-layer batch-first stack of LayerNormLSTMCell. Drop-in for nn.LSTM's
-    forward(x) -> (output, (h_n, c_n)) shape."""
+    """Multi-layer batch-first stack of LayerNormLSTMCell."""
 
     def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1, dropout: float = 0.0) -> None:
         super().__init__()
@@ -124,8 +123,7 @@ class LayerNormGRUCell(nn.Module):
 
 
 class LayerNormGRU(nn.Module):
-    """Multi-layer batch-first stack of LayerNormGRUCell. Drop-in for nn.GRU's
-    forward(x) -> (output, h_n) shape."""
+    """Multi-layer batch-first stack of LayerNormGRUCell."""
 
     def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1, dropout: float = 0.0) -> None:
         super().__init__()

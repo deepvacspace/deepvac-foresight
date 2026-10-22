@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""Runs one real-chamber experiment under live PPO advisor control, then scores it
-against the digital twin and a CEM-optimized fixed-PID baseline.
-
-The PPO policy re-decides the PID triplet every checkpoint's mpc_hold_s from live
-TCP telemetry, writing to the chamber's currently-active gain-scheduled PID band.
-Each decision (elapsed_s, kp, ki, kd) is recorded.
-
-After the run, the recorded decisions are replayed through the digital twin for an
-"expected" trajectory, scored against the real one for twin accuracy; a CEM search
-over the whole run finds a single best-fixed PID triplet as a "baseline" trajectory.
-All three trajectories are plotted, and a report.json/console summary covers twin
-accuracy and advisor-vs-baseline cost/tail_mae/overshoot improvement.
-
---gru-checkpoint accepts either family's checkpoint (the twin used is whichever
-family it's stamped with) despite the flag name.
-
-Examples:
-
-    python -m advisor.run_advisor_experiment \\
-        --gru-checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt \\
-        --ppo-checkpoint advisor/policy_ppo_v5/policy.pt \\
-        --target-temp 0 --duration-s 1200
-
-    python -m advisor.run_advisor_experiment --gru-checkpoint ... --ppo-checkpoint ... \\
-        --pid-row 2 --tcp-host 172.0.30.10
-"""
+"""Run one real-chamber experiment under live PPO advisor control, then score it against CEM baselines and the digital twin."""
 
 from __future__ import annotations
 
@@ -43,10 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import make_run_id  
-from deepvac.metrics import append_mae_column  
-from deepvac.mpc import make_feature_row, optimize_pid_for_state, rollout_constant_pid, run_pid_substeps
-from deepvac.pid import clip_pid, pid_bounds  
+from deepvac.artifacts import make_run_id
+from deepvac.metrics import append_mae_column
+from deepvac.mpc import make_feature_row, rollout_constant_pid, run_pid_substeps
+from deepvac.mpc_batch import optimize_pid_batched
+from deepvac.pid import clip_pid, pid_bounds
 
 from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
 from digitaltwin.twin_acceptance import compare_trajectories, describe_trajectory, simulate_twin, trajectory_cost
@@ -54,7 +30,7 @@ from advisor.advise_pid import add_cost_args, build_initial_state, horizon_cost
 from advisor.train_policy_ppo import ActorCritic, DIFF_CLIP
 from deepvac.mpc import add_common_mpc_args
 
-from tcp.tcp_common import (  
+from tcp.tcp_common import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
@@ -63,7 +39,7 @@ from tcp.tcp_common import (
     request_states,
 )
 
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "runs"
+DEFAULT_OUTPUT_DIR = ROOT / "experiments" / "advisor"
 
 
 # -----------------------------------------------------------------------------
@@ -78,8 +54,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     ap.add_argument("--gru-checkpoint", required=True,
-                    help="Rollout-trained digital-twin checkpoint (GRU or LSTM, despite the flag name).")
-    ap.add_argument("--ppo-checkpoint", required=True, help="Trained PPO policy (advisor/policy_ppo_*/policy.pt).")
+                    help="Rollout-trained digital-twin checkpoint.")
+    ap.add_argument("--ppo-checkpoint", required=True, help="Trained PPO policy checkpoint.")
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--session-name", default=None, help="Output subfolder name. Default: generated id.")
     ap.add_argument("--no-plot", action="store_true")
@@ -94,16 +70,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # --- Real-chamber PID write -------------------------------------------------
     ap.add_argument("--pid-row", type=int, default=None,
-                    help="Controller PID row index [0..4] to write decisions to. "
-                         "Default: auto-detect the chamber's currently-active band "
-                         "(temp_pid_idx) before every decision.")
+                    help="Controller PID row [0..4] to write decisions to (default: the active band).")
 
     # --- Safety ------------------------------------------------------------------
     ap.add_argument("--safety-margin-c", type=float, default=5.0,
-                    help="Abort if temp strays this far past [min(start,target), max(start,target)].")
+                    help="Abort if temp strays this far outside the start/target range.")
     ap.add_argument("--max-consecutive-failures", type=int, default=10)
 
-    # --- Preconditioning (optional, off by default) -------------------------------
+    # --- Preconditioning ----------------------------------------------------------
     ap.add_argument("--precondition", action="store_true", help="Heat/settle the chamber before the experiment.")
     ap.add_argument("--heatup-temp-ref", type=float, default=25.0)
     ap.add_argument("--heatup-duration", type=float, default=5.0 * 60.0)
@@ -136,7 +110,7 @@ def load_ppo_policy(path: Path, device: torch.device) -> tuple[ActorCritic, dict
 
 
 def ppo_decide(model: ActorCritic, obs: np.ndarray, device: torch.device, args: argparse.Namespace) -> np.ndarray:
-    """Deterministic action: tanh(actor_mean(obs)), de-normalized and rounded to a PID triplet."""
+    """Return the policy's deterministic PID triplet for one observation."""
     obs_t = torch.as_tensor(obs[None, :], dtype=torch.float32, device=device)
     with torch.no_grad():
         mean, _, _ = model(obs_t)
@@ -160,8 +134,7 @@ def build_observation(
     episode_steps: int,
     args: argparse.Namespace,
 ) -> np.ndarray:
-    """Builds the policy's 8-dim observation vector from live chamber telemetry
-    and the shadow PID/Diff controller state."""
+    """Build the policy's 8-dim observation from live telemetry and the shadow controller."""
     scale = max(abs(args.temp_min), abs(args.temp_max), 1e-6)
     i_scale = max(abs(float(args.u_min)), abs(float(args.u_max)), 1e-6)
     lo, hi = pid_bounds(args)
@@ -184,8 +157,7 @@ def step_shadow_controller(
     *, shadow_pid: ChamberPID, shadow_diff: CodesysDiff, temp: float, temp_ref: float,
     kp: float, ki: float, kd: float, dt_s: float, args: argparse.Namespace,
 ) -> None:
-    """Advances the shadow ChamberPID/CodesysDiff controller in place by dt_s,
-    using the real measured temperature and gains."""
+    """Advance the shadow PID/Diff controller in place by dt_s."""
     run_pid_substeps(
         pid=shadow_pid, diff=shadow_diff, temp_start=temp, temp_end=temp, temp_ref=temp_ref,
         kp=kp, ki=ki, kd=kd, dt_s=dt_s, period_s=float(args.pid_period_s),
@@ -199,7 +171,7 @@ def step_shadow_controller(
 
 
 def read_snapshot(args: argparse.Namespace) -> dict[str, float] | None:
-    """One full TCP state snapshot (all states, including temp_pid_idx), retried."""
+    """Read one full TCP state snapshot, with retries."""
     for _ in range(max(1, args.read_retries + 1)):
         try:
             return request_states(host=args.tcp_host, port=args.tcp_port, timeout=args.tcp_timeout)
@@ -232,10 +204,7 @@ def precondition_chamber(run_id: str, args: argparse.Namespace) -> None:
 def run_real_experiment(
     run_id: str, *, ppo_model: ActorCritic, ppo_checkpoint: dict, device: torch.device, args: argparse.Namespace,
 ) -> tuple[pd.DataFrame, list[tuple[float, int, int, int]], float, bool, str]:
-    """Drives the real chamber under live PPO control for args.duration_s.
-
-    Returns (samples_df, decisions[(elapsed_s, kp, ki, kd)], start_temp, aborted, reason).
-    """
+    """Drive the real chamber under live PPO control for args.duration_s."""
     mpc_hold_s = float(ppo_checkpoint["mpc_hold_s"])
     dt_s = float(args.dt_s)
     episode_steps = max(1, int(round(float(args.duration_s) / mpc_hold_s)))
@@ -353,8 +322,7 @@ def cold_start_seed(
     *, feature_names: list, window_steps: int, start_temp: float, target_temp: float, dt_s: float,
     kp: float, ki: float, kd: float,
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Builds a cold-start feature window and controller terms for the twin,
-    holding start_temp constant for window_steps ticks."""
+    """Build a cold-start feature window and controller terms at a held start temperature."""
     pid = ChamberPID()
     diff = CodesysDiff()
     diff.prev_value = start_temp
@@ -381,8 +349,7 @@ def cold_start_seed(
 def decisions_to_pid_schedule(
     decisions: list[tuple[float, int, int, int]], duration_s: float, dt_s: float,
 ) -> list[tuple[float, float, float]]:
-    """Expands a decision log into one (kp, ki, kd) per simulate_twin() step,
-    holding each decision's PID constant until the next decision's timestamp."""
+    """Expand a decision log into one (kp, ki, kd) per twin step."""
     total_steps = max(1, int(round(duration_s / dt_s)))
     schedule: list[tuple[float, float, float]] = []
     next_idx = 0
@@ -396,12 +363,14 @@ def decisions_to_pid_schedule(
     return schedule
 
 
-def compute_cem_baseline(
+CEM_CANDIDATE_NAMES = ("cem_best", "cem_median", "cem_mean")
+
+
+def compute_cem_candidates(
     *, model, checkpoint: dict, feature_names: list, window_steps: int, device: torch.device,
     args: argparse.Namespace,
-) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float], dict, int]:
-    """Runs one CEM search over the whole run for a single best-fixed PID
-    triplet, then rolls it out."""
+) -> dict:
+    """Run one CEM search over the whole run and roll out its best, median, and mean candidates."""
     cem_args = argparse.Namespace(**vars(args))
     cem_args.mpc_horizon_s = float(args.duration_s)
     cem_args.context_csv = None
@@ -411,20 +380,41 @@ def compute_cem_baseline(
     )
 
     rng = np.random.default_rng(int(args.seed))
-    decision = optimize_pid_for_state(
+    decision = optimize_pid_batched(
         state=state, model=model, checkpoint=checkpoint, feature_names=feature_names, device=device,
-        args=cem_args, rng=rng, predict_fn=predict_delta_t1, cost_fn=horizon_cost, decision_idx=1,
+        args=cem_args, rng=rng, cost_fn=horizon_cost, decision_idx=1,
     )
-    pid = np.asarray([decision["kp"], decision["ki"], decision["kd"]], dtype=float)
-    n_evaluated = int(decision["n_evaluated"])
+    pids = {
+        "cem_best": (decision["kp"], decision["ki"], decision["kd"]),
+        "cem_median": decision["population_median_pid"],
+        "cem_mean": decision["population_mean_pid"],
+    }
+    search_cost = {
+        "cem_best": float(decision["cost"]),
+        "cem_median": float(decision["population_median_cost"]),
+        "cem_mean": float(decision["population_mean_cost"]),
+    }
 
     horizon_steps = max(1, int(math.ceil(float(args.duration_s) / float(args.dt_s))))
-    metrics, temps = rollout_constant_pid(
-        initial_state=state, candidate_pid=pid, model=model, checkpoint=checkpoint, feature_names=feature_names,
-        device=device, args=cem_args, horizon_steps=horizon_steps, predict_fn=predict_delta_t1, cost_fn=horizon_cost,
-    )
-    times = np.arange(1, len(temps) + 1, dtype=float) * float(args.dt_s)
-    return times, np.asarray(temps, dtype=float), (float(pid[0]), float(pid[1]), float(pid[2])), metrics, n_evaluated
+    trajectories: dict[str, dict] = {}
+    for name, pid in pids.items():
+        pid_arr = np.asarray(pid, dtype=float)
+        _, temps = rollout_constant_pid(
+            initial_state=state, candidate_pid=pid_arr, model=model, checkpoint=checkpoint,
+            feature_names=feature_names, device=device, args=cem_args, horizon_steps=horizon_steps,
+            predict_fn=predict_delta_t1, cost_fn=horizon_cost,
+        )
+        times = np.arange(1, len(temps) + 1, dtype=float) * float(args.dt_s)
+        trajectories[name] = {
+            "times": times, "temps": np.asarray(temps, dtype=float),
+            "pid": tuple(float(v) for v in pid),
+        }
+
+    return {
+        "trajectories": trajectories,
+        "search_cost": search_cost,
+        "n_evaluated": int(decision["n_evaluated"]),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -432,46 +422,60 @@ def compute_cem_baseline(
 # -----------------------------------------------------------------------------
 
 
-def improvement_table(
-    real_t: np.ndarray, real_temp: np.ndarray, baseline_t: np.ndarray, baseline_temp: np.ndarray,
-    target: float, args: argparse.Namespace,
-) -> dict[str, dict[str, float | None]]:
-    """Compares the real (advisor) trajectory against the CEM baseline on cost,
-    tail MAE, and overshoot, with percent improvement (positive = advisor better)."""
-    real_desc = describe_trajectory(real_t, real_temp, target, args)
-    base_desc = describe_trajectory(baseline_t, baseline_temp, target, args)
-    real_desc["cost"] = trajectory_cost(real_t, real_temp, target, args)
-    base_desc["cost"] = trajectory_cost(baseline_t, baseline_temp, target, args)
+def build_comparison_table(
+    *, real_t: np.ndarray, real_temp: np.ndarray, cem_trajectories: dict, target: float, args: argparse.Namespace,
+) -> dict:
+    """Score the real PPO run and the CEM candidates, with improvement relative to cem_median."""
+    rows: dict[str, dict[str, float | None]] = {}
 
-    table: dict[str, dict[str, float | None]] = {}
-    for key in ("cost", "tail_mae", "overshoot"):
-        real_v, base_v = real_desc.get(key), base_desc.get(key)
+    ppo_desc = describe_trajectory(real_t, real_temp, target, args)
+    ppo_desc["cost"] = trajectory_cost(real_t, real_temp, target, args)
+    rows["ppo"] = ppo_desc
+
+    for name, traj in cem_trajectories.items():
+        desc = describe_trajectory(traj["times"], traj["temps"], target, args)
+        desc["cost"] = trajectory_cost(traj["times"], traj["temps"], target, args)
+        rows[name] = desc
+
+    median_cost = rows["cem_median"].get("cost")
+    improvement_vs_median_percent: dict[str, float | None] = {}
+    for name in ("cem_best", "ppo"):
+        v = rows[name].get("cost")
         pct = None
-        if real_v is not None and base_v is not None and base_v not in (0, None):
-            pct = 100.0 * (base_v - real_v) / abs(base_v)
-        table[key] = {"advisor": real_v, "baseline": base_v, "improvement_percent": pct}
-    return table
+        if v is not None and median_cost not in (0, None):
+            pct = 100.0 * (median_cost - v) / abs(median_cost)
+        improvement_vs_median_percent[name] = pct
+
+    return {"rows": rows, "improvement_vs_median_percent": improvement_vs_median_percent}
 
 
 def plot_comparison(
-    real: pd.DataFrame, expected: pd.DataFrame, baseline_t: np.ndarray, baseline_temp: np.ndarray,
+    real: pd.DataFrame, expected: pd.DataFrame, cem_trajectories: dict,
     decisions: list[tuple[float, int, int, int]], target: float, output_path: Path,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    cem_style = {
+        "cem_best": ("#2ca02c", ":"),
+        "cem_median": ("#9467bd", "-."),
+        "cem_mean": ("#8c564b", (0, (1, 1))),
+    }
+
     fig, (ax_temp, ax_pid) = plt.subplots(
         2, 1, figsize=(12, 8), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
     )
-    ax_temp.plot(real["elapsed_s"], real["temp"], label="real (chamber)", color="#1f77b4", linewidth=2)
-    ax_temp.plot(expected["elapsed_s"], expected["temp"], label="expected (twin)", color="#ff7f0e",
+    ax_temp.plot(real["elapsed_s"], real["temp"], label="real (chamber, ppo)", color="#1f77b4", linewidth=2)
+    ax_temp.plot(expected["elapsed_s"], expected["temp"], label="expected (twin replay of ppo)", color="#ff7f0e",
                 linestyle="--", linewidth=2)
-    ax_temp.plot(baseline_t, baseline_temp, label="CEM baseline (twin)", color="#2ca02c",
-                linestyle=":", linewidth=2)
+    for name, traj in cem_trajectories.items():
+        color, style = cem_style.get(name, ("#7f7f7f", ":"))
+        ax_temp.plot(traj["times"], traj["temps"], label=f"{name} (twin)", color=color,
+                    linestyle=style, linewidth=1.5)
     ax_temp.axhline(target, color="#888888", linestyle="--", alpha=0.6, label="target")
     ax_temp.set_ylabel("Temperature (deg C)")
-    ax_temp.set_title("Real advisor-controlled run vs digital-twin expectation vs CEM baseline")
+    ax_temp.set_title("Real PPO-controlled run vs digital-twin expectation vs CEM candidates")
     ax_temp.grid(True, alpha=0.25)
     ax_temp.legend()
 
@@ -538,6 +542,20 @@ def main() -> None:
 
     args.start_temp = start_temp
 
+    cem =compute_cem_candidates(
+        model=twin_model, checkpoint=twin_checkpoint, feature_names=feature_names, window_steps=window_steps,
+        device=device, args=args,
+    )
+    for name, traj in cem["trajectories"].items():
+        pd.DataFrame(
+            {"elapsed_s": traj["times"], "temp": traj["temps"], "temp_ref": float(args.target_temp)}
+        ).to_csv(session_dir / f"{name}_trajectory.csv", index=False)
+
+    comparison = build_comparison_table(
+        real_t=real["elapsed_s"].to_numpy(dtype=float), real_temp=real["temp"].to_numpy(dtype=float),
+        cem_trajectories=cem["trajectories"], target=float(args.target_temp), args=args,
+    )
+
     pid_schedule = decisions_to_pid_schedule(decisions, float(args.duration_s), float(args.dt_s))
     warm_window, warm_terms = cold_start_seed(
         feature_names=feature_names, window_steps=window_steps, start_temp=start_temp,
@@ -559,23 +577,11 @@ def main() -> None:
     )
     aligned.to_csv(session_dir / "twin_accuracy.csv", index=False)
 
-    baseline_t, baseline_temp, baseline_pid, baseline_metrics, baseline_n_evaluated = compute_cem_baseline(
-        model=twin_model, checkpoint=twin_checkpoint, feature_names=feature_names, window_steps=window_steps,
-        device=device, args=args,
-    )
-    pd.DataFrame({"elapsed_s": baseline_t, "temp": baseline_temp, "temp_ref": float(args.target_temp)}).to_csv(
-        session_dir / "baseline_trajectory.csv", index=False
-    )
-
-    improvement = improvement_table(
-        real["elapsed_s"].to_numpy(dtype=float), real["temp"].to_numpy(dtype=float),
-        baseline_t, baseline_temp, float(args.target_temp), args,
-    )
-
     if not args.no_plot:
-        plot_comparison(real, expected, baseline_t, baseline_temp, decisions, float(args.target_temp),
+        plot_comparison(real, expected, cem["trajectories"], decisions, float(args.target_temp),
                         session_dir / "trajectory_comparison.png")
 
+    cem_pids = {name: traj["pid"] for name, traj in cem["trajectories"].items()}
     report = {
         "run_id": run_id,
         "gru_checkpoint": str(Path(args.gru_checkpoint).resolve()),
@@ -587,14 +593,33 @@ def main() -> None:
         "n_decisions": len(decisions),
         "aborted": aborted,
         "abort_reason": abort_reason,
-        "baseline_pid": {"kp": baseline_pid[0], "ki": baseline_pid[1], "kd": baseline_pid[2]},
-        "baseline_n_candidates_evaluated": baseline_n_evaluated,
+        "cem_pids": {name: {"kp": pid[0], "ki": pid[1], "kd": pid[2]} for name, pid in cem_pids.items()},
+        "cem_n_candidates_evaluated": cem["n_evaluated"],
+        "cem_search_cost": cem["search_cost"],
+        "comparison": comparison["rows"],
+        "improvement_vs_median_percent": comparison["improvement_vs_median_percent"],
         "twin_accuracy": twin_metrics,
-        "advisor_vs_baseline": improvement,
     }
     (session_dir / "report.json").write_text(json.dumps(report, indent=2, default=float), encoding="utf-8")
 
-    print("\n=== Digital-twin accuracy (expected vs real) ===")
+    print(f"\n=== CEM candidates ({cem['n_evaluated']} evaluated) ===")
+    for name in CEM_CANDIDATE_NAMES:
+        kp, ki, kd = cem_pids[name]
+        print(f"{name:10s}: pid=(kp={kp:g}, ki={ki:g}, kd={kd:g})  search_cost={cem['search_cost'][name]:.4f}")
+
+    print("\n=== Comparison: cem_best / cem_median / cem_mean / ppo (real), same cost function ===")
+    for name in (*CEM_CANDIDATE_NAMES, "ppo"):
+        row = comparison["rows"][name]
+        print(f"{name:10s}: cost={fmt(row.get('cost'))}  tail_mae={fmt(row.get('tail_mae'))}  "
+              f"overshoot={fmt(row.get('overshoot'))}  final_temp={fmt(row.get('final_temp'))}")
+
+    print("\n=== Improvement vs cem_median baseline (positive = lower cost than median pick) ===")
+    for name in ("cem_best", "ppo"):
+        pct = comparison["improvement_vs_median_percent"][name]
+        pct_str = "n/a" if pct is None else f"{pct:+.1f}%"
+        print(f"{name:10s}: improvement={pct_str}")
+
+    print("\n=== Digital-twin accuracy (validation: twin replay of ppo's real decisions vs real) ===")
     print(f"mae            : {twin_metrics['mae_temp']:.3f} deg C")
     print(f"rmse           : {twin_metrics['rmse_temp']:.3f} deg C")
     print(f"bias           : {twin_metrics['bias_temp']:+.3f} deg C")
@@ -604,20 +629,14 @@ def main() -> None:
     print(f"overshoot err  : real={fmt(twin_metrics.get('real_overshoot'))} "
           f"pred={fmt(twin_metrics.get('pred_overshoot'))} err={fmt(twin_metrics.get('err_overshoot'))}")
 
-    print(f"\n=== Advisor (real) vs CEM baseline (kp={baseline_pid[0]:g}, ki={baseline_pid[1]:g}, "
-          f"kd={baseline_pid[2]:g}) ===")
-    for key, row in improvement.items():
-        pct = row["improvement_percent"]
-        pct_str = "n/a" if pct is None else f"{pct:+.1f}%"
-        print(f"{key:10s}: advisor={fmt(row['advisor'])}  baseline={fmt(row['baseline'])}  improvement={pct_str}")
-
     if aborted:
         print(f"\nWARNING: experiment aborted early -- {abort_reason}")
 
     print(f"\nrun_samples          : {session_dir / 'run_samples.csv'}")
     print(f"decisions            : {session_dir / 'decisions.csv'}")
     print(f"expected_trajectory  : {session_dir / 'expected_trajectory.csv'}")
-    print(f"baseline_trajectory  : {session_dir / 'baseline_trajectory.csv'}")
+    for name in CEM_CANDIDATE_NAMES:
+        print(f"{name}_trajectory : {session_dir / f'{name}_trajectory.csv'}")
     print(f"report               : {session_dir / 'report.json'}")
     if not args.no_plot:
         print(f"plot                 : {session_dir / 'trajectory_comparison.png'}")
