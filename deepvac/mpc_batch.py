@@ -1,9 +1,4 @@
-"""Vectorized GRU+MPC rollouts: score a whole candidate population in one batch.
-
-A vectorization of digitaltwin.common.ChamberPID, digitaltwin.common.CodesysDiff and
-deepvac.mpc.step_state. Only i_part, diff.prev_value and diff.filter_out carry
-across steps; every other PID term is recomputed.
-"""
+"""Vectorized MPC rollouts that score a whole PID candidate population in one batch."""
 
 from __future__ import annotations
 
@@ -19,6 +14,7 @@ from deepvac.mpc import (
     CandidateTable,
     SimState,
     inject_seed_candidates,
+    population_summary,
     sample_candidates_random,
     select_history_candidates,
 )
@@ -26,7 +22,6 @@ from deepvac.pid import clip_pid, pid_bounds
 
 CostFn = Callable[..., dict[str, float]]
 
-# digitaltwin.common.CodesysDiff / ChamberPID internal limits.
 _DIFF_CLIP = 5.0
 _DIFF_GAIN = 10.0
 _D_PART_CLIP = 0.4
@@ -48,7 +43,7 @@ def _vec_diff_update(
 
 def _vec_pid_step(
     *,
-    x_target: float,
+    x_target: float | np.ndarray,
     x_measured: np.ndarray,
     kp: np.ndarray,
     ki: np.ndarray,
@@ -59,14 +54,9 @@ def _vec_pid_step(
     u_max: float,
     i_reverse_mul: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Vectorized digitaltwin.common.ChamberPID.step (enable=True).
+    """Vectorized digitaltwin.common.ChamberPID.step (enable=True)."""
+    delta = np.asarray(x_target, dtype=float) - x_measured
 
-    Mirrors the scalar ordering exactly: u sums the *unclipped* p_part with the
-    clipped i_part/d_part, and p_part is only clipped afterwards for reporting.
-    """
-    delta = float(x_target) - x_measured
-
-    # The scalar version returns 0 and leaves state untouched when p_coef == 0.
     live = kp != 0.0
     safe_kp = np.where(live, kp, 1.0)
     inv_kp = 1.0 / safe_kp
@@ -99,7 +89,7 @@ def _vec_pid_step(
 def _vec_run_pid_substeps(
     *,
     temp: np.ndarray,
-    temp_ref: float,
+    temp_ref: float | np.ndarray,
     kp: np.ndarray,
     ki: np.ndarray,
     kd: np.ndarray,
@@ -121,7 +111,6 @@ def _vec_run_pid_substeps(
 
     u = u_p = u_i = u_d = np.zeros_like(temp)
     for _ in range(n_substeps):
-        # temp_mode="hold": the measured temperature is constant across substeps.
         diff_out, diff_prev, diff_filter = _vec_diff_update(temp, diff_prev, diff_filter, diff_dc)
         u, u_p, i_part, u_d = _vec_pid_step(
             x_target=temp_ref,
@@ -150,7 +139,7 @@ def feature_rows(
     feature_names: Sequence[str],
     *,
     temp: np.ndarray,
-    temp_ref: float,
+    temp_ref: float | np.ndarray,
     previous_temp: np.ndarray,
     dt_s: float,
     u: np.ndarray,
@@ -162,14 +151,15 @@ def feature_rows(
     kd: np.ndarray,
 ) -> np.ndarray:
     """Vectorized deepvac.mpc.make_feature_row. Returns (N, n_features)."""
-    error = float(temp_ref) - temp
+    temp_ref_arr = np.asarray(temp_ref, dtype=float)
+    error = temp_ref_arr - temp
     dt_safe = max(float(dt_s), 1e-9)
     velocity = (temp - previous_temp) / dt_safe
     ones = np.ones_like(temp)
 
     values = {
         "temp": temp,
-        "temp_ref": float(temp_ref) * ones,
+        "temp_ref": temp_ref_arr * ones,
         "error": error,
         "abs_error": np.abs(error),
         "dt_s": float(dt_s) * ones,
@@ -220,13 +210,7 @@ def rollout_population(
     cost_fn: CostFn,
     diff_dc: float = 0.995,
 ) -> list[dict[str, float]]:
-    """Roll every candidate forward over the horizon in one batched pass.
-
-    Equivalent to calling deepvac.mpc.rollout_constant_pid once per row of
-    candidate_pids, including the early-stop-on-invalid behaviour: a candidate
-    whose predicted temperature goes non-finite or leaves --max-abs-temp keeps
-    that step and then stops contributing further ones.
-    """
+    """Roll every candidate PID forward over the horizon in one batched pass and score it."""
     pids = clip_pid(np.atleast_2d(np.asarray(candidate_pids, dtype=float)), args)
     n = len(pids)
     kp, ki, kd = pids[:, 0].copy(), pids[:, 1].copy(), pids[:, 2].copy()
@@ -269,7 +253,6 @@ def rollout_population(
             i_reverse_mul=float(args.pid_i_reverse_mul),
         )
 
-        # predict_next(): the last window row is rewritten from the *current* temp.
         windows[:, -1, :] = feature_rows(
             feature_names,
             temp=temp, temp_ref=target_temp, previous_temp=previous_temp, dt_s=dt_s,
@@ -279,13 +262,11 @@ def rollout_population(
         next_temp = temp + batched_predict_delta(model, checkpoint, windows, device)
 
         bad = ~np.isfinite(next_temp) | (np.abs(next_temp) > max_abs_temp)
-        # Non-finite values only; finite outliers are left alone.
         next_temp = np.nan_to_num(next_temp, nan=max_abs_temp, posinf=max_abs_temp, neginf=-max_abs_temp)
 
         temps[:, step] = next_temp
         lengths[alive] = step + 1
 
-        # step_state(): roll the window and append a row built from the new temp.
         next_rows = feature_rows(
             feature_names,
             temp=next_temp, temp_ref=target_temp, previous_temp=temp, dt_s=dt_s,
@@ -299,7 +280,6 @@ def rollout_population(
         if not alive.any():
             break
 
-        # Freeze dead candidates so their garbage cannot poison later batches.
         previous_temp = np.where(alive, temp, previous_temp)
         temp = np.where(alive, next_temp, temp)
 
@@ -340,12 +320,7 @@ def optimize_pid_batched(
     decision_idx: int | None = None,
     time_budget_s: float | None = None,
 ) -> dict[str, float]:
-    """Batched equivalent of deepvac.mpc.optimize_pid_for_state.
-
-    Adds time_budget_s: CEM stops after the current iteration once the budget is
-    spent, so a live decision degrades to fewer refinement passes instead of
-    overrunning its hold interval.
-    """
+    """Batched CEM/random PID search for one MPC decision, with an optional time budget."""
     lo, hi = pid_bounds(args)
     current_pid = np.asarray([state.kp, state.ki, state.kd], dtype=float)
     horizon_steps = max(1, int(math.ceil(float(args.mpc_horizon_s) / float(args.dt_s))))
@@ -385,15 +360,17 @@ def optimize_pid_batched(
         evaluated = evaluate(samples)
         iterations_run = 1
     else:
-        mean = np.clip(current_pid, lo, hi)
-        std = 0.40 * (hi - lo)
         min_std = np.maximum(float(args.cem_min_std_frac) * (hi - lo), 1e-9)
         elite_n = max(2, int(round(population * float(args.cem_elite_frac))))
         total_iters = max(1, int(args.cem_iterations))
+        mean = std = None
 
         for cem_iter in range(total_iters):
-            samples = np.clip(rng.normal(loc=mean, scale=std, size=(population, 3)), lo, hi)
-            samples = np.clip(np.floor(samples + 0.5), lo, hi)
+            if cem_iter == 0:
+                samples = sample_candidates_random(rng, population, args, center=None)
+            else:
+                samples = np.clip(rng.normal(loc=mean, scale=std, size=(population, 3)), lo, hi)
+                samples = np.clip(np.floor(samples + 0.5), lo, hi)
             seed_start = 0
             if bool(args.include_current_candidate):
                 samples[0, :] = current_pid
@@ -416,7 +393,7 @@ def optimize_pid_batched(
                     f"[decision {label}] cem {cem_iter + 1}/{total_iters} "
                     f"best={float(rows[0]['cost']):.4f} "
                     f"pid=({float(rows[0]['kp']):.0f}, {float(rows[0]['ki']):.0f}, {float(rows[0]['kd']):.0f}) "
-                    f"elapsed={1000.0 * (time.perf_counter() - t0):.0f}ms",
+                    f"elapsed={time.perf_counter() - t0:.2f}s",
                     flush=True,
                 )
 
@@ -432,8 +409,8 @@ def optimize_pid_batched(
     evaluated.sort(key=lambda r: float(r["cost"]))
     best = dict(evaluated[0])
     best_pid = np.asarray([best["kp"], best["ki"], best["kd"]], dtype=float)
+    population = population_summary(evaluated)
 
-    # Safety gate: keep the current PID unless the improvement is meaningful.
     if float(best["cost"]) >= current_cost - float(args.apply_margin):
         best = dict(current_metrics)
         best["kp"], best["ki"], best["kd"] = (float(v) for v in current_pid)
@@ -447,4 +424,5 @@ def optimize_pid_batched(
     best["n_history_candidates"] = int(len(history_candidates))
     best["cem_iterations_run"] = int(iterations_run)
     best["decision_seconds"] = float(time.perf_counter() - t0)
+    best.update(population)
     return best

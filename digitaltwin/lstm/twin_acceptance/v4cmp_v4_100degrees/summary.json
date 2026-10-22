@@ -1,0 +1,145 @@
+{
+  "n_runs": 10,
+  "by_start_mode": {
+    "cold": {
+      "n_runs": 5,
+      "mae_temp": {
+        "mean": 8.731974825450155,
+        "median": 8.363017522979613,
+        "p90_abs": 9.779479182606924
+      },
+      "rmse_temp": {
+        "mean": 9.094350881073922,
+        "median": 8.708023097506251,
+        "p90_abs": 10.197532290264078
+      },
+      "bias_temp": {
+        "mean": 8.731974825450155,
+        "median": 8.363017522979613,
+        "p90_abs": 9.779479182606924
+      },
+      "p90_abs_error_temp": {
+        "mean": 10.979009403274242,
+        "median": 10.780736282277882,
+        "p90_abs": 12.412716541068042
+      },
+      "max_abs_error_temp": {
+        "mean": 11.137162036173624,
+        "median": 10.969561098137973,
+        "p90_abs": 12.58476728897538
+      },
+      "final_error_temp": {
+        "mean": 8.177671796925825,
+        "median": 8.789226032263258,
+        "p90_abs": 10.838549746223979
+      },
+      "err_overshoot": {
+        "mean": 0.0,
+        "median": 0.0,
+        "p90_abs": 0.0
+      },
+      "err_tail_mae": {
+        "mean": -8.731974825450157,
+        "median": -8.363017522979614,
+        "p90_abs": 9.779479182606927
+      },
+      "err_final_temp": {
+        "mean": 8.177671796925825,
+        "median": 8.789226032263258,
+        "p90_abs": 10.838549746223979
+      },
+      "error_at_120s": {
+        "mean": 10.424702129716064,
+        "median": 10.666580077830021,
+        "p90_abs": 11.243230371688552
+      },
+      "cost_rank_correlation": null,
+      "twin_valid_fraction": 0.0,
+      "band_reached_real_fraction": 0.0,
+      "band_reached_pred_fraction": 1.0
+    },
+    "warm": {
+      "n_runs": 5,
+      "mae_temp": {
+        "mean": 0.42569201291122116,
+        "median": 0.3969329268297723,
+        "p90_abs": 0.7079862320633735
+      },
+      "rmse_temp": {
+        "mean": 0.4899301208008736,
+        "median": 0.4274849399997007,
+        "p90_abs": 0.811547077687258
+      },
+      "bias_temp": {
+        "mean": 0.2121348815848941,
+        "median": 0.15751132849466526,
+        "p90_abs": 0.6796370515818748
+      },
+      "p90_abs_error_temp": {
+        "mean": 0.7109861629095523,
+        "median": 0.6014087090568055,
+        "p90_abs": 1.125754242116197
+      },
+      "max_abs_error_temp": {
+        "mean": 0.8119292308151443,
+        "median": 0.6503055157742352,
+        "p90_abs": 1.2681625415966096
+      },
+      "final_error_temp": {
+        "mean": 0.09623556670460402,
+        "median": -0.04714369887308578,
+        "p90_abs": 1.0000777141074935
+      },
+      "err_overshoot": {
+        "mean": -0.1550551440600884,
+        "median": 0.0,
+        "p90_abs": 0.468690490722662
+      },
+      "err_tail_mae": {
+        "mean": -0.2208893682356166,
+        "median": -0.15810642126810137,
+        "p90_abs": 0.6620861968768594
+      },
+      "err_time_to_near_s": {
+        "mean": -0.7991403102874756,
+        "median": -1.9928662776947021,
+        "p90_abs": 7.196903467178345
+      },
+      "err_time_to_settle_s": {
+        "mean": 2.0005613962809243,
+        "median": 2.0090439319610596,
+        "p90_abs": 3.595920991897583
+      },
+      "err_final_temp": {
+        "mean": 0.09623556670460402,
+        "median": -0.04714369887308578,
+        "p90_abs": 1.0000777141074935
+      },
+      "err_cost": {
+        "mean": -1.2970018022415475,
+        "median": -0.1600158551797456,
+        "p90_abs": 3.7142867587258417
+      },
+      "error_at_120s": {
+        "mean": 0.07687048938658167,
+        "median": 0.09947269887953814,
+        "p90_abs": 1.1289198015594435
+      },
+      "cost_rank_correlation": -1.0,
+      "twin_valid_fraction": 0.0,
+      "band_reached_real_fraction": 1.0,
+      "band_reached_pred_fraction": 1.0
+    }
+  },
+  "mode": "replay",
+  "checkpoint": "C:\\Users\\mike_\\Desktop\\foresight\\digitaltwin\\lstm\\validation_rollout_v4\\lstm_rollout_v4.pt",
+  "session_dir": "C:\\Users\\mike_\\Desktop\\foresight\\digitaltwin\\lstm\\twin_acceptance\\v4cmp_v4_100degrees",
+  "target_temp": 0.0,
+  "checkpoints_s": [
+    120.0,
+    300.0,
+    600.0,
+    900.0,
+    1200.0
+  ]
+}

@@ -1,7 +1,4 @@
-"""Canonical feature names and lightweight run/telemetry data shapes.
-
-These document the CSV/JSON conventions used throughout the toolkit.
-"""
+"""Canonical feature names and run/telemetry data shapes."""
 
 from __future__ import annotations
 
@@ -33,11 +30,7 @@ class PIDBounds:
 
 @dataclass(frozen=True)
 class RunSample:
-    """One row of a run's `run_samples.csv` / telemetry CSV.
-
-    `timestamp` and `elapsed_s` are alternative time bases; most loaders accept
-    either and derive the other.
-    """
+    """One row of a run's telemetry CSV."""
 
     timestamp: float
     temp: float

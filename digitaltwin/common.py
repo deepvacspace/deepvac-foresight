@@ -15,14 +15,7 @@ from digitaltwin.model import GRUModel, LSTMModel, MODEL_CLASSES  # noqa: F401
 
 
 def _ensure_sklearn_stub() -> None:
-    """Register minimal sklearn stubs so torch.load can unpickle StandardScaler
-    objects from checkpoints without requiring scikit-learn to be installed.
-
-    Both defining module paths are registered, since the one a checkpoint
-    references depends on the sklearn version that saved it:
-        sklearn.preprocessing._data.StandardScaler   (sklearn >= 0.24)
-        sklearn.preprocessing.data.StandardScaler    (sklearn < 0.24)
-    """
+    """Register minimal sklearn stubs so checkpoint scalers unpickle without scikit-learn."""
     if "sklearn" in sys.modules:
         return
 
@@ -35,7 +28,7 @@ def _ensure_sklearn_stub() -> None:
 
     def _pkg(name: str) -> types.ModuleType:
         m = types.ModuleType(name)
-        m.__path__ = []  # type: ignore[attr-defined]  # marks it as a package
+        m.__path__ = []  # type: ignore[attr-defined]
         m.__package__ = name
         return m
 
@@ -44,7 +37,6 @@ def _ensure_sklearn_stub() -> None:
     pre_mod.StandardScaler = _StandardScaler  # type: ignore[attr-defined]
     sklearn_mod.preprocessing = pre_mod  # type: ignore[attr-defined]
 
-    # submodule where StandardScaler is actually defined (version-dependent)
     for sub in ("sklearn.preprocessing._data", "sklearn.preprocessing.data"):
         sub_mod = types.ModuleType(sub)
         sub_mod.StandardScaler = _StandardScaler  # type: ignore[attr-defined]
@@ -157,7 +149,6 @@ class ChamberPID:
         u = self.p_part + self.i_part + self.d_part
         u = limit(self.u_min, u, self.u_max)
 
-        # Clipped for logging only.
         self.p_part = limit(self.u_min, self.p_part, self.u_max)
 
         return u, self.p_part, self.i_part, self.d_part

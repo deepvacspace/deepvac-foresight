@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Label randomized digital-twin states with CEM's chosen PID triplet, producing a
-(observation, action) dataset for advisor.train_policy_bc.
-
-Each episode starts from a random (temp, kp, ki, kd). At every decision point
-the production CEM optimizer (deepvac.mpc_batch.optimize_pid_batched) is
-queried for its chosen PID and the (observation, PID) pair is recorded. With
-probability --explore-frac a random PID is executed instead of CEM's own
-choice before advancing to the next decision.
-
-Example:
-
-    python -m advisor.generate_bc_dataset --checkpoint digitaltwin/gru/validation_rollout/gru_rollout.pt --n-states 20000
-"""
+"""Label randomized digital-twin states with CEM's chosen PID to build a behavior-cloning dataset."""
 
 from __future__ import annotations
 
@@ -26,14 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.mpc import SimState, add_common_mpc_args, initialize_feature_window, step_state  
-from deepvac.mpc_batch import optimize_pid_batched  
-from deepvac.pid import clip_pid, pid_bounds  
+from deepvac.mpc import SimState, add_common_mpc_args, initialize_feature_window, step_state
+from deepvac.mpc_batch import optimize_pid_batched
+from deepvac.pid import clip_pid, pid_bounds
 
 from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
 
-from advisor.advise_pid import add_cost_args, horizon_cost  
-from advisor.train_policy_ppo import DIFF_CLIP  
+from advisor.advise_pid import add_cost_args, horizon_cost
+from advisor.train_policy_ppo import DIFF_CLIP
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "bc_dataset" / "cem_labels.npz"
 
@@ -49,11 +37,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--temp-min", type=float, default=-5.0)
     ap.add_argument("--temp-max", type=float, default=26.0)
     ap.add_argument("--explore-frac", type=float, default=0.2,
-                    help="Probability of executing a random PID instead of CEM's choice after labeling.")
+                    help="Probability of executing a random PID instead of CEM's choice.")
     ap.add_argument("--save-every", type=int, default=500)
     ap.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
-                    help="If --output already exists, load it and keep adding states on top "
-                         "instead of overwriting it from scratch.")
+                    help="Append to an existing --output instead of overwriting it.")
 
     add_common_mpc_args(ap)
     add_cost_args(ap)
@@ -64,7 +51,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def compute_obs(state: SimState, step_idx: int, episode_steps: int, args: argparse.Namespace,
                  lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
-    """Builds the same 8-dim observation as advisor.train_policy_ppo.VecTwinEnv._obs(), for one state."""
+    """Build the 8-dim policy observation for one state."""
     scale = max(abs(args.temp_min), abs(args.temp_max), 1e-6)
     velocity = (state.temp - state.previous_temp) / max(float(args.dt_s), 1e-9)
     i_scale = max(abs(float(args.u_min)), abs(float(args.u_max)), 1e-6)

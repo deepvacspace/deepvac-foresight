@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""Train the digital-twin plant model (GRU or LSTM, per --model-family) on
-multi-step rollouts instead of single steps.
-
-Loss is computed over an N-step unrolled rollout, feeding the predicted temperature
-back in and simulating the PID/diff controller in-graph. Early stopping and
-checkpointing select on free-running rollout MAE over held-out runs.
-
-The checkpoint layout matches digitaltwin/train.py's, so the result is a drop-in
-replacement wherever that checkpoint is consumed (MPC, twin_acceptance.py,
-package-model).
-
---watch polls --history-root and retrains, warm-started from the last promoted
-checkpoint, whenever enough new runs appear.
-
-Examples:
-
-    # One-shot, fine-tuning an existing 1-step checkpoint with a 100-step rollout loss.
-    python -m digitaltwin.train_rollout --model-family gru \
-        --init-from digitaltwin/gru/validation_t1/gru_t1.pt \
-        --rollout-steps 100 --epochs 40 --split-by pid-config
-
-    # Left running alongside an optimizer script collecting new chamber runs.
-    python -m digitaltwin.train_rollout --model-family lstm \
-        --init-from digitaltwin/lstm/validation_t1/lstm_t1.pt --rollout-steps 100 \
-        --watch --watch-min-new-runs 5 --watch-interval-s 300
-"""
+"""Train the digital-twin plant model on multi-step rollouts, selecting checkpoints on rollout error."""
 
 from __future__ import annotations
 
@@ -44,7 +19,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import sklearn.preprocessing  # noqa: F401,E402
+import sklearn.preprocessing
 import torch
 import torch.nn as nn
 
@@ -66,7 +41,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 WORK_DIR = ROOT / "experiments"
 DEFAULT_HISTORY_ROOT = WORK_DIR / "run_history"
 
-# digitaltwin.common.CodesysDiff / ChamberPID constants.
 DIFF_DC = 0.995
 DIFF_CLIP = 5.0
 DIFF_GAIN = 10.0
@@ -79,8 +53,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     ap.add_argument("--model-family", choices=sorted(MODEL_CLASSES), default=None,
-                    help="Which recurrent architecture to train. Default: the family stamped "
-                         "in --init-from's checkpoint when that flag is given, else gru.")
+                    help="Recurrent architecture to train (default: --init-from's family, else gru).")
     ap.add_argument("--history-root", nargs="+", default=[str(DEFAULT_HISTORY_ROOT)],
                     help="One or more run-history roots; runs from all of them are pooled together.")
     ap.add_argument("--telemetry-names", nargs="+", default=["run_samples.csv"])
@@ -91,11 +64,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--min-duration-s", type=float, default=300.0)
     ap.add_argument("--exclude-prefixes", nargs="*", default=[])
     ap.add_argument("--max-runs", type=int, default=None,
-                    help=(
-                        "Cap runs loaded, for quick checks. With --watch, folders beyond the cap "
-                        "still count as 'seen' once discovered, so they are never trained on "
-                        "later either -- leave this unset for real watch runs."
-                    ))
+                    help="Cap on runs loaded, for quick checks.")
 
     # --- Splitting -------------------------------------------------------------
     ap.add_argument(
@@ -108,10 +77,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--config-key",
         choices=["band-table", "triplet-set", "first-triplet"],
         default="band-table",
-        help=(
-            "What counts as one PID configuration. band-table uses the configured "
-            "far/mid/near gain table; the others use the triplets seen in the samples."
-        ),
+        help="What counts as one PID configuration.",
     )
     ap.add_argument(
         "--config-cluster-eps",
@@ -125,7 +91,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # --- Rollout ---------------------------------------------------------------
     ap.add_argument("--rollout-steps", type=int, default=120,
-                    help="Unroll length used for the training loss. Match the MPC horizon.")
+                    help="Unroll length used for the training loss.")
     ap.add_argument("--eval-horizon-steps", type=int, default=None,
                     help="Unroll length for validation/test rollouts. Default: --rollout-steps.")
     ap.add_argument("--rollout-stride", type=int, default=10,
@@ -136,10 +102,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--control-mode",
         choices=["simulate", "teacher"],
         default="simulate",
-        help=(
-            "simulate runs the PID/diff controller in-graph from the predicted "
-            "temperature, matching inference. teacher reads temp_u* from the log."
-        ),
+        help="Compute control terms in-graph (simulate) or read them from the log (teacher).",
     )
     ap.add_argument("--pid-period-s", type=float, default=0.1)
     ap.add_argument("--dt-s", type=float, default=None,
@@ -180,8 +143,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--layer-norm",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Use a LayerNorm-normalized recurrent cell instead of plain nn.GRU/nn.LSTM. "
-             "Trains slower step-for-step (no cuDNN fused kernel).",
+        help="Use a LayerNorm-normalized recurrent cell.",
     )
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=40)
@@ -201,13 +163,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--optuna-trials",
         type=int,
         default=0,
-        help="Run this many Optuna trials over model/optimization hyperparameters before the "
-             "final training pass, selecting on val_rollout_mae. 0 disables search.",
+        help="Number of Optuna hyperparameter trials before final training (0 disables).",
     )
     ap.add_argument("--optuna-epochs", type=int, default=15,
-                    help="Max epochs per Optuna trial; the final pass still trains for --epochs.")
+                    help="Max epochs per Optuna trial.")
     ap.add_argument("--optuna-timeout-s", type=float, default=None,
-                    help="Stop starting new trials after this many seconds. Default: no timeout.")
+                    help="Stop starting new trials after this many seconds.")
     ap.add_argument(
         "--optuna-pruner",
         choices=["median", "none"],
@@ -215,8 +176,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Prune weak trials early based on val_rollout_mae.",
     )
     ap.add_argument("--optuna-storage", default=None,
-                    help="Optuna storage URL, e.g. sqlite:///output_dir/optuna.db, letting a "
-                         "study resume across interrupted runs. Default: in-memory, one-shot.")
+                    help="Optuna storage URL for a resumable study (default: in-memory).")
 
     # --- MLflow experiment tracking -----------------------------------------------
     ap.add_argument(
@@ -231,16 +191,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="MLflow tracking URI. Default: a local file store under "
                          "<script-dir>/<model-family>/mlruns.")
     ap.add_argument("--mlflow-run-name", default=None,
-                    help="Optional MLflow run name for the parent run. --watch names each pass's "
-                         "run automatically when this is left unset.")
+                    help="MLflow run name for the parent run.")
 
     # --- Split locking -----------------------------------------------------------
     ap.add_argument(
         "--lock-split",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Compute the val/test split once and reuse it on every later run. "
-             "Default: on for --watch, off otherwise.",
+        help="Compute the val/test split once and reuse it (default: on with --watch).",
     )
     ap.add_argument("--split-lock-path", default=None,
                     help="Where the locked split is stored. Default: --output-dir/split_lock.json.")
@@ -270,7 +228,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def format_hms(seconds: float) -> str:
-    """Format a duration in seconds as hh:mm:ss (hours unbounded, e.g. 26:03:41)."""
+    """Format a duration in seconds as h:mm:ss."""
     total = int(round(max(0.0, float(seconds))))
     hours, rem = divmod(total, 3600)
     minutes, secs = divmod(rem, 60)
@@ -306,9 +264,7 @@ def clone_args(args: argparse.Namespace, updates: dict[str, object] | None = Non
 
 
 def resolve_family_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    """Fill in --model-family (from --init-from's stamp when not passed explicitly)
-    and the --output-dir/--checkpoint-name/--experiment-name defaults that depend
-    on it, once it's known post-parse."""
+    """Fill in --model-family and the defaults that depend on it."""
     if args.model_family is None:
         args.model_family = "gru"
         if args.init_from:
@@ -372,7 +328,7 @@ def log_metrics_with_prefix(mlflow, metrics: dict[str, Any], prefix: str = "", s
 
 
 # -----------------------------------------------------------------------------
-# Differentiable controller (torch port of digitaltwin.common.ChamberPID / CodesysDiff)
+# Differentiable controller
 # -----------------------------------------------------------------------------
 
 
@@ -392,7 +348,7 @@ def torch_pid_substeps(
     u_max: float,
     i_reverse_mul: float,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Differentiable equivalent of deepvac.mpc.run_pid_substeps (temp_mode="hold")."""
+    """Differentiable PID/Diff controller substeps at a held temperature."""
     u = u_p = u_d = torch.zeros_like(temp)
     zero = torch.zeros_like(temp)
     one = torch.ones_like(temp)
@@ -502,13 +458,13 @@ def unroll(
     horizon: int,
 ) -> torch.Tensor:
     """Free-running rollout. Returns predicted temperatures, shape (B, horizon)."""
-    window = batch["window"]              # (B, W, F) raw
-    temp = batch["temp0"]                 # (B,)
+    window = batch["window"]
+    temp = batch["temp0"]
     i_part = batch["i_part0"]
     diff_prev = batch["diff_prev0"]
     diff_filter = batch["diff_filter0"]
-    exog = batch["exog"]                  # (B, H, 4): temp_ref, kp, ki, kd
-    logged_terms = batch.get("logged_terms")  # (B, H, 4)
+    exog = batch["exog"]
+    logged_terms = batch.get("logged_terms")
 
     substeps = batch["n_substeps"]
     n_substeps = int(substeps[0].item())
@@ -580,8 +536,7 @@ BAND_COLUMNS = [
 
 
 def read_band_table(run_dir: Path) -> list[float] | None:
-    """The far/mid/near gain table a run was configured with, read from
-    run_summary.csv or band_metrics.json. None if the run used no static table."""
+    """Read the far/mid/near gain table a run was configured with, or None."""
     summary_path = run_dir / "run_summary.csv"
     if summary_path.exists():
         try:
@@ -672,11 +627,7 @@ def build_config_groups(
 
 
 def pid_config_signature(df: pd.DataFrame, key: str = "triplet-set") -> str:
-    """Identity of the PID configuration a run used, derived from its samples.
-
-    triplet-set   every distinct (kp, ki, kd) applied during the run.
-    first-triplet only the triplet active at the start (the far-band entry gains).
-    """
+    """Identity of the PID configuration a run used, derived from its samples."""
     coefs = df[["kp", "ki", "kd"]].round(0).astype(int)
 
     if key == "first-triplet":
@@ -746,8 +697,7 @@ def apply_split_lock(
     groups: dict[str, str],
     lock_path: Path,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Reuse a previously locked val/test split, folding in any run collected
-    since the lock as training data."""
+    """Reuse a locked val/test split, adding newer runs to training."""
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     locked_val = [r for r in lock["val_runs"] if r in frames]
     locked_test = [r for r in lock["test_runs"] if r in frames]
@@ -788,7 +738,6 @@ def build_rollout_samples(
     feature_scale = max(abs(float(args.control_feature_scale)), 1e-9)
     n_substeps = max(1, int(round(dt_s / max(float(args.pid_period_s), 1e-6))))
 
-    # Controller state left behind by each row, which the next row's step starts from.
     i_part_state = term_cols[:, 2] / feature_scale
     diff_filter_state = invert_diff_filter(
         term_cols[:, 3] / feature_scale, exog_cols[:, 1], exog_cols[:, 3]
@@ -900,7 +849,7 @@ def make_rollout_loader(
 
 
 def find_run_csvs_multi(history_roots: Sequence[str], telemetry_names: Sequence[str]) -> list[Path]:
-    """find_run_csvs over several roots, pooled."""
+    """Find run CSVs across several history roots."""
     csvs: list[Path] = []
     for root in history_roots:
         csvs.extend(find_run_csvs(Path(root), telemetry_names))
@@ -966,7 +915,7 @@ def evaluate_rollout(
             pred = unroll(model, batch, scalers, args, feature_index, horizon)
             errors.append((pred - batch["target"]).cpu().numpy())
 
-    err = np.concatenate(errors, axis=0)  # (N, horizon)
+    err = np.concatenate(errors, axis=0)
     per_step_mae = np.mean(np.abs(err), axis=0)
     per_step_bias = np.mean(err, axis=0)
 
@@ -1201,8 +1150,7 @@ def train_rollout_model(
     trial=None,
     metric_prefix: str = "",
 ) -> dict[str, object]:
-    """Build the model for one hyperparameter configuration and run the epoch
-    loop, selecting on rollout MAE."""
+    """Train one hyperparameter configuration, selecting on validation rollout MAE."""
     device = data["device"]
     feature_index = data["feature_index"]
     scalers = data["scalers"]
@@ -1335,8 +1283,7 @@ def finalize_rollout_run(
     run_start: float,
     mlflow=None,
 ) -> dict[str, object]:
-    """Evaluate the trained model on test, save the checkpoint, and write the report.
-    Runs once for the final training pass, not per Optuna trial."""
+    """Evaluate the trained model on test, save the checkpoint, and write the report."""
     device = data["device"]
     feature_index = data["feature_index"]
     scalers = data["scalers"]
@@ -1479,8 +1426,7 @@ def suggest_optuna_args(trial, base_args: argparse.Namespace) -> argparse.Namesp
 def run_optuna(
     args: argparse.Namespace, data: dict[str, object], mlflow=None
 ) -> argparse.Namespace:
-    """Search hyperparameters against the already-built rollout dataset, and
-    return an args namespace carrying the best trial's values."""
+    """Search hyperparameters with Optuna and return args carrying the best trial's values."""
     try:
         import optuna
     except ImportError as exc:
@@ -1562,8 +1508,7 @@ def run_optuna(
 
 
 def train_and_validate(args: argparse.Namespace) -> dict[str, object]:
-    """Run one full data-load/split/[optuna]/train/evaluate pass and return its
-    key results."""
+    """Run one full load/split/tune/train/evaluate pass and return its key results."""
     run_start = time.perf_counter()
     set_seed(args.seed)
 

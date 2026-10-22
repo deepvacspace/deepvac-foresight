@@ -1,6 +1,4 @@
-"""Run-id/CSV/JSON persistence, run-directory discovery, and batch-scenario
-orchestration.
-"""
+"""Run-id/CSV/JSON persistence, run-directory discovery, and batch-scenario orchestration."""
 
 from __future__ import annotations
 
@@ -42,8 +40,7 @@ def append_rows_csv(path: str, rows: Iterable[dict[str, object]]) -> None:
 
 
 def append_row_csv(path: str, row: dict[str, object]) -> None:
-    """Append one row, aligned to the file's existing header (missing columns
-    become blank)."""
+    """Append one row to a CSV, aligned to the file's existing header."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -82,7 +79,6 @@ def load_runs_table(path: str):
     if p.exists() and p.stat().st_size > 0:
         return pd.read_csv(p)
 
-    # Fallback for run-scoped storage under history/<run_id>/<filename>.
     target_name = p.name
     tables = []
     for match in Path("history").glob(f"*/{target_name}"):
@@ -105,12 +101,12 @@ def iter_run_dirs(history_root: Path) -> Iterator[Path]:
 
 
 # -----------------------------------------------------------------------------
-# Batch-scenario orchestration (gru/batch_mpc_runs.py, lstm/batch_mpc_runs.py)
+# Batch-scenario orchestration
 # -----------------------------------------------------------------------------
 
 
 def cli_flag_name(key: str) -> str:
-    """mpc_horizon_s -> --mpc-horizon-s"""
+    """Convert a scenario key to its CLI flag name."""
     return "--" + key.replace("_", "-")
 
 
@@ -183,11 +179,7 @@ def flatten_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def add_selection_score(df):
-    """Add a practical, lower-is-better ranking score for comparing runs.
-
-    Priority: avoid overshoot, end close to the reference, keep tail MAE and
-    tail STD low, and avoid excessive PID changes.
-    """
+    """Add a lower-is-better selection_score column for ranking runs."""
     required = [
         "metric_overshoot_max",
         "metric_final_abs_error",
@@ -212,11 +204,7 @@ def add_selection_score(df):
 
 
 def run_batch_scenarios(*, args: Any, scenarios: list[dict[str, Any]], label: str) -> None:
-    """Run every scenario through `args.script` as a subprocess, collect each
-    run's mpc_summary.json into one comparison CSV, and print the best runs.
-
-    `label` is only used for the console banner (e.g. "GRU", "LSTM").
-    """
+    """Run each scenario as a subprocess and collect the summaries into one comparison CSV."""
     import pandas as pd
 
     output_dir = Path(args.output_dir)

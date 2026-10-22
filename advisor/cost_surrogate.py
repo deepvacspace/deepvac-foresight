@@ -1,6 +1,4 @@
-"""A small MLP that predicts CEM's rollout cost for a candidate PID directly
-from a state, without simulating the digital twin step by step.
-"""
+"""Small MLP that predicts CEM's rollout cost for a candidate PID at a given state."""
 
 from __future__ import annotations
 
@@ -60,12 +58,7 @@ def predict_cost(
     candidate_pids: np.ndarray,
     device: torch.device,
 ) -> np.ndarray:
-    """Predicted cost for a batch of candidate triplets at one state.
-
-    With checkpoint["target_normalization"] != "none", these are per-state
-    relative scores: valid for ranking within one call's candidate_pids, not
-    comparable across states.
-    """
+    """Predict the cost of a batch of candidate PID triplets at one state."""
     x_scaler = checkpoint["x_scaler"]
     y_scaler = checkpoint["y_scaler"]
     n = len(candidate_pids)

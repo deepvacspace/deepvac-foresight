@@ -1,10 +1,4 @@
-"""Rolling feature window built from live telemetry.
-
-    window = LiveFeatureWindow(feature_names, window_steps)
-    window.push(**telemetry_state)
-    if window.ready:
-        pred_delta = predict_delta_t1(model, checkpoint, window.array(), device)
-"""
+"""Rolling feature window built from live telemetry."""
 
 from __future__ import annotations
 
@@ -63,7 +57,7 @@ class LiveFeatureWindow:
         self._rows.append(row)
 
     def array(self) -> np.ndarray:
-        """The window as (window_steps, n_features), ready for predict_delta_t1."""
+        """Return the window as a (window_steps, n_features) array."""
         if not self.ready:
             raise RuntimeError(f"Only {len(self._rows)}/{self.window_steps} real samples collected.")
         return np.stack(self._rows, axis=0)

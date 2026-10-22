@@ -1,6 +1,4 @@
-"""Registry mapping a model family name ("gru", "lstm", ...) to its loader,
-predictor, and plant-model class. Add a new family by adding one factory
-function and one `_REGISTRY` entry."""
+"""Registry mapping a model family name to its loader, predictor, and plant-model class."""
 
 from __future__ import annotations
 

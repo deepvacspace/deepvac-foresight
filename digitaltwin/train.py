@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Train, validate, tune, and test a one-step digital-twin plant model (GRU or
-LSTM, per --model-family) from history."""
+"""Train, validate, tune, and test a one-step digital-twin plant model from run history."""
 
 from __future__ import annotations
 from deepvac.datasets import (
@@ -131,8 +130,7 @@ def clone_args(
 
 
 def resolve_family_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    """Fill in --output-dir/--plots-dir/--experiment-name defaults that depend
-    on --model-family, once it's known post-parse."""
+    """Fill in path and experiment-name defaults that depend on --model-family."""
     if args.output_dir is None:
         args.output_dir = str(SCRIPT_DIR / args.model_family / "validation_t1")
     if args.plots_dir is None:

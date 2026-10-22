@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """Unified `deepvac` command-line entry point.
 
-Each subcommand imports its script module and forwards the remaining argv to
-that module's own `main()` / `build_arg_parser()`, with `extra_args` (if any)
-spliced in first -- used to pin a family-selectable digitaltwin/ script to
-gru or lstm under separate command names.
-
 Usage:
     deepvac <command> [--help] [command-specific flags...]
-    deepvac --list          # print every command with its one-line description
+    deepvac --list
 """
 
 from __future__ import annotations
@@ -16,9 +11,6 @@ from __future__ import annotations
 import importlib
 import sys
 
-# command name -> (module to import, one-line description, extra argv spliced
-# in before the user's own flags). Grouped to match the module layout; run
-# `deepvac --list` for the live list.
 COMMANDS: dict[str, tuple[str, str] | tuple[str, str, tuple[str, ...]]] = {
     # --- GRU/LSTM digital twin (digitaltwin/) -------------------------------
     "train-gru": ("digitaltwin.train", "Pretrain the one-step GRU plant model (stage 1).",
@@ -44,24 +36,6 @@ COMMANDS: dict[str, tuple[str, str] | tuple[str, str, tuple[str, ...]]] = {
                         "Predict a whole-run trajectory (LSTM twin), no chamber run needed.",
                         ("--model-family", "lstm")),
 
-    # --- Pre-existing entries pointing at scripts not present in this repo
-    # (predate the gru/ + lstm/ -> digitaltwin/ merge; left as-is, out of scope) --
-    "train-gru-multihorizon": ("gru.gru_multi_time", "Train/validate/test the multi-horizon GRU plant model."),
-    "simulate-gru": ("gru.simulate_gru", "Closed-loop reconstruction via trained GRU + ChamberPID."),
-    "simulate-runs": ("gru.simulate_runs", "Rank PID triplets via GRU + CODESYS PID simulation."),
-    "mpc-gru": ("gru.mpc_gru", "Continuous GRU + MPC PID scheduler (CEM/random shooting)."),
-    "batch-mpc-gru": ("gru.batch_mpc_runs", "Batch GRU + MPC runs across scenarios, compare results."),
-    "gp-gru": ("gru.gp_gru", "GRU-ranked PID scheduler using historical/GP candidates."),
-    "batch-gp-gru": ("gru.batch_gp_gru", "Batch runner for gp-gru."),
-    "gp-build": ("gru.gp_build", "Build the historical PID candidate table for GRU ranking."),
-    "mpc-build": ("gru.mpc_build", "Build the candidate table for history-seeded GRU MPC."),
-    "diagnose-codesys": ("gru.diagnose_codesys", "Validate GRU replay-control + CODESYS PID reconstruction."),
-
-    "predict-lstm": ("lstm.predict", "Evaluate a trained LSTM checkpoint against run history."),
-    "mpc-lstm": ("lstm.mpc_lstm", "Continuous LSTM + MPC PID scheduler (CEM/random shooting)."),
-    "batch-mpc-lstm": ("lstm.batch_mpc_runs", "Batch LSTM + MPC runs across scenarios, compare results."),
-    "train-lstm-legacy": ("lstm.lstm", "Older standalone LSTM pipeline, kept for comparison only."),
-
     # --- AI advisor (advisor/) -----------------------------------------------
     "advise-pid": ("advisor.advise_pid", "Suggest a PID triplet or adaptively control it via CEM search over the twin."),
     "train-cost-surrogate": ("advisor.train_cost_surrogate", "Train a fast MLP to screen PID candidates before CEM."),
@@ -73,7 +47,6 @@ COMMANDS: dict[str, tuple[str, str] | tuple[str, str, tuple[str, ...]]] = {
     "optimize-random-pid": ("optimization.random_pid_tests", "Automated multi-run TCP tests with random PIDs."),
     "optimize-tocero-3band": ("optimization.tocero_3band", "Automated multi-run TCP tests, 3-band PID schedule."),
     "optimize-tocero-5band": ("optimization.tocero_5band", "Automated multi-run TCP tests, 5-band PID schedule."),
-    "optimize-tocero-gp-mpc": ("optimization.tocero_gp_mpc", "Live run: GP far-band PID, then GRU+MPC replanning inside the band."),
     "collect-runs": ("optimization.collect_runs", "Repeated, start-gated runs driven by a time-indexed PID profile (logs the reheat)."),
     "replay-gp": ("optimization.gp_experiment", "Replay one GRU-ranked GP decision schedule over TCP."),
     "replay-gp-batch": ("optimization.batch_gp_experiment", "Replay multiple GRU-ranked GP decision schedules."),
@@ -127,8 +100,6 @@ def main(argv: list[str] | None = None) -> int:
     module_name, _, *extra = entry
     extra_args = list(extra[0]) if extra else []
     module = importlib.import_module(module_name)
-    # The target module parses sys.argv itself, so present argv as if it had
-    # been invoked directly (python -m <module_name> <extra_args> <rest>).
     sys.argv = [module_name, *extra_args, *rest]
     return module.main() or 0
 

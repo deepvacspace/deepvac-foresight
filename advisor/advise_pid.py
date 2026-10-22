@@ -1,27 +1,8 @@
 #!/usr/bin/env python3
-"""AI advisor: recommend PID gains for a temperature setpoint using the trained
-digital-twin plant model (GRU or LSTM) as a simulator, with CEM/random-shooting
-search over it.
+"""AI advisor: recommend or adaptively control PID gains via CEM search over the digital twin.
 
-    --mode suggest   One CEM search over the whole intended run. Returns a
-                     triplet and its predicted whole-run outcome. Seeded cold by
-                     default, or from a real run via --context-csv.
-
-    --mode adapt     Receding-horizon control: replans on a short --mpc-horizon-s
-                     every --mpc-hold-s, for the whole --duration-s.
-
-Point --checkpoint at a rollout-trained checkpoint (digitaltwin/train_rollout.py's
-output), not the plain one-step {gru,lstm}_t1.pt. The twin family used is
-whichever the checkpoint itself is stamped with.
-
-Defaults to the ~24 -> 0 problem (experiments/run_history's baseline); override
---start-temp/--target-temp for anything else the twin has data for.
-
-Examples:
-
-    python -m advisor.advise_pid --mode suggest --checkpoint digitaltwin/gru/validation_rollout/promoted.pt
-    python -m advisor.advise_pid --mode adapt   --checkpoint digitaltwin/gru/validation_rollout/promoted.pt \
-        --duration-s 1200 --mpc-horizon-s 80 --mpc-hold-s 20
+    --mode suggest   One CEM search over the whole run, returning a single PID triplet.
+    --mode adapt     Receding-horizon control that replans every --mpc-hold-s.
 """
 
 from __future__ import annotations
@@ -40,34 +21,37 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deepvac.artifacts import make_run_id  
-from deepvac.datasets import prepare_run_dataframe  
-from deepvac.mpc import (  
+from deepvac.artifacts import make_run_id
+from deepvac.datasets import prepare_run_dataframe
+from deepvac.mpc import (
     SimState,
     add_common_mpc_args,
     initialize_feature_window,
-    optimize_pid_for_state,
     overshoot_array,
     rollout_constant_pid,
     run_mpc_simulation,
 )
-from deepvac.pid import pid_bounds  
+from deepvac.mpc_batch import optimize_pid_batched
+from deepvac.pid import pid_bounds
 
 from digitaltwin.common import ChamberPID, CodesysDiff, load_model, predict_delta_t1
 from digitaltwin.twin_acceptance import describe_trajectory, warm_start_at
 
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "runs"
+DEFAULT_OUTPUT_DIR = ROOT / "experiments" / "suggestions"
 
 
 def add_cost_args(ap: argparse.ArgumentParser) -> None:
     """CLI weights for horizon_cost()."""
-    ap.add_argument("--w-overshoot-max", type=float, default=100.0)
-    ap.add_argument("--w-overshoot-rmse", type=float, default=30.0)
+    ap.add_argument("--w-overshoot-max", type=float, default=3.0)
+    ap.add_argument("--w-overshoot-rmse", type=float, default=2.0)
     ap.add_argument("--w-abs-error", type=float, default=0.2)
-    ap.add_argument("--w-final-abs-error", type=float, default=0.5)
-    ap.add_argument("--w-near-std", type=float, default=2.0)
+    ap.add_argument("--w-final-abs-error", type=float, default=1.0)
+    ap.add_argument("--w-near-std", type=float, default=0.0,
+                    help="Weight on temp std-dev while within --near-band of target.")
+    ap.add_argument("--w-tail-std", type=float, default=300.0,
+                    help="Weight on temp std-dev over the last --tail-window-s.")
     ap.add_argument("--w-control-change", type=float, default=0.01,
-                    help="Penalty for changing PID coefficients. Helps avoid noisy schedules.")
+                    help="Penalty for changing PID coefficients.")
 
 
 def normalized_pid_distance(a: np.ndarray, b: np.ndarray, args: argparse.Namespace) -> float:
@@ -87,8 +71,7 @@ def horizon_cost(
     valid: bool,
     args: argparse.Namespace,
 ) -> dict[str, float]:
-    """Rollout cost: overshoot (max + RMSE), tracking error, final-error
-    emphasis, and a penalty for changing PID coefficients."""
+    """Rollout cost from overshoot, tracking error, final error, temperature spread, and PID changes."""
     temps = np.asarray(temps, dtype=float)
     if temps.size == 0:
         return {"cost": float(args.w_invalid), "valid": False}
@@ -99,6 +82,12 @@ def horizon_cost(
 
     near_mask = abs_error <= float(args.near_band)
     near_std = float(np.std(temps[near_mask])) if np.any(near_mask) else 0.0
+
+    tail_window_s = max(float(getattr(args, "tail_window_s", 0.0)), 0.0)
+    dt_s = max(float(args.dt_s), 1e-9)
+    n_tail_steps = max(1, int(round(tail_window_s / dt_s))) if tail_window_s > 0 else 1
+    tail_temps = temps[-n_tail_steps:]
+    tail_std = float(np.std(tail_temps)) if tail_temps.size > 1 else 0.0
 
     overshoot_max = float(np.max(overshoot))
     overshoot_rmse = float(np.sqrt(np.mean(np.square(overshoot))))
@@ -112,6 +101,7 @@ def horizon_cost(
         + float(args.w_abs_error) * mae
         + float(args.w_final_abs_error) * final_abs_error
         + float(args.w_near_std) * near_std
+        + float(getattr(args, "w_tail_std", 0.0)) * tail_std
         + float(args.w_control_change) * change_penalty
     )
     if not valid:
@@ -123,6 +113,80 @@ def horizon_cost(
         "horizon_mae": mae,
         "horizon_final_abs_error": final_abs_error,
         "horizon_near_std": near_std,
+        "horizon_tail_std": tail_std,
+        "horizon_overshoot_max": overshoot_max,
+        "horizon_overshoot_rmse": overshoot_rmse,
+        "pid_change_norm": change_penalty,
+    }
+
+
+def add_adapt_cost_args(ap: argparse.ArgumentParser) -> None:
+    """CLI weights for adapt_horizon_cost() (--mode adapt only)."""
+    ap.add_argument("--adapt-w-approach", type=float, default=3.0,
+                    help="Weight on mean abs error while still approaching the target.")
+    ap.add_argument("--adapt-w-overshoot-max", type=float, default=3.0)
+    ap.add_argument("--adapt-w-overshoot-rmse", type=float, default=2.0)
+    ap.add_argument("--adapt-w-settle-std", type=float, default=100.0,
+                    help="Weight on temp std-dev once near or past the target.")
+    ap.add_argument("--adapt-w-settle-error", type=float, default=30.0,
+                    help="Weight on mean abs error once near or past the target.")
+    ap.add_argument("--adapt-w-final-abs-error", type=float, default=1.0)
+    ap.add_argument("--adapt-w-control-change", type=float, default=5.0,
+                    help="Penalty for changing PID coefficients between decisions.")
+
+
+def adapt_horizon_cost(
+    *,
+    temps: np.ndarray,
+    candidate_pid: np.ndarray,
+    previous_pid: np.ndarray,
+    start_temp: float,
+    target_temp: float,
+    valid: bool,
+    args: argparse.Namespace,
+) -> dict[str, float]:
+    """Phase-aware approach/settle cost for --mode adapt's receding-horizon rollouts."""
+    temps = np.asarray(temps, dtype=float)
+    if temps.size == 0:
+        return {"cost": float(args.w_invalid), "valid": False}
+
+    abs_error = np.abs(target_temp - temps)
+    overshoot = overshoot_array(temps, start_temp=start_temp, target_temp=target_temp)
+
+    near = abs_error <= float(args.near_band)
+    crossed = overshoot > 0.0
+    settled_from_here = np.cumsum(near | crossed) > 0
+    approaching = ~settled_from_here
+
+    approach_error = float(np.mean(abs_error[approaching])) if np.any(approaching) else 0.0
+    settle_error = float(np.mean(abs_error[settled_from_here])) if np.any(settled_from_here) else 0.0
+    settle_std = (
+        float(np.std(temps[settled_from_here])) if np.count_nonzero(settled_from_here) > 1 else 0.0
+    )
+    overshoot_max = float(np.max(overshoot))
+    overshoot_rmse = float(np.sqrt(np.mean(np.square(overshoot))))
+    final_abs_error = float(abs_error[-1])
+    change_penalty = normalized_pid_distance(candidate_pid, previous_pid, args)
+
+    cost = (
+        float(args.adapt_w_approach) * approach_error
+        + float(args.adapt_w_overshoot_max) * overshoot_max
+        + float(args.adapt_w_overshoot_rmse) * overshoot_rmse
+        + float(args.adapt_w_settle_std) * settle_std
+        + float(args.adapt_w_settle_error) * settle_error
+        + float(args.adapt_w_final_abs_error) * final_abs_error
+        + float(args.adapt_w_control_change) * change_penalty
+    )
+    if not valid:
+        cost += float(args.w_invalid)
+
+    return {
+        "cost": float(cost),
+        "valid": bool(valid),
+        "horizon_approach_error": approach_error,
+        "horizon_settle_std": settle_std,
+        "horizon_settle_error": settle_error,
+        "horizon_final_abs_error": final_abs_error,
         "horizon_overshoot_max": overshoot_max,
         "horizon_overshoot_rmse": overshoot_rmse,
         "pid_change_norm": change_penalty,
@@ -136,19 +200,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--mode", choices=["suggest", "adapt"], default="suggest")
     ap.add_argument("--checkpoint", required=True,
-                    help="A rollout-trained checkpoint (digitaltwin/train_rollout.py's output).")
+                    help="Rollout-trained digital-twin checkpoint.")
     ap.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     ap.add_argument("--session-name", default=None, help="Output subfolder name. Default: generated id.")
     ap.add_argument("--no-plot", action="store_true")
 
     ap.add_argument(
         "--context-csv", default=None,
-        help="A real run_samples.csv to seed the twin's window from, instead of the "
-             "no-telemetry PID-driven estimate (--mode suggest only).",
+        help="Real run_samples.csv to seed the twin's window from (--mode suggest only).",
     )
     ap.add_argument(
         "--context-offset", type=int, default=None,
-        help="Row offset into --context-csv. Default: window_steps - 1 (that run's own start).",
+        help="Row offset into --context-csv.",
     )
     ap.add_argument("--mpc-horizon-s", type=float, default=60.0,
                     help="Future horizon optimized at every MPC decision (--mode adapt).")
@@ -157,6 +220,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     add_common_mpc_args(ap)
     add_cost_args(ap)
+    add_adapt_cost_args(ap)
     ap.set_defaults(start_temp=24.0, target_temp=0.0)
 
     return ap
@@ -230,10 +294,10 @@ def run_suggest(
     suggest_args.mpc_horizon_s = float(args.duration_s)
 
     rng = np.random.default_rng(int(args.seed))
-    decision = optimize_pid_for_state(
+    decision = optimize_pid_batched(
         state=state, model=model, checkpoint=checkpoint, feature_names=feature_names,
         device=device, args=suggest_args, rng=rng,
-        predict_fn=predict_delta_t1, cost_fn=horizon_cost, decision_idx=1,
+        cost_fn=horizon_cost, decision_idx=1,
     )
     pid = np.asarray([decision["kp"], decision["ki"], decision["kd"]], dtype=float)
 
@@ -286,13 +350,12 @@ def run_adapt(
     device: torch.device, args: argparse.Namespace, session_dir: Path,
 ) -> None:
     if args.context_csv:
-        print("WARNING: --context-csv is ignored in --mode adapt; "
-              "run_mpc_simulation always cold-starts (see its own docstring).")
+        print("WARNING: --context-csv is ignored in --mode adapt.")
 
     trajectory, decisions, metrics = run_mpc_simulation(
         model=model, checkpoint=checkpoint, feature_names=feature_names,
         window_steps=window_steps, device=device, args=args,
-        predict_fn=predict_delta_t1, cost_fn=horizon_cost,
+        predict_fn=predict_delta_t1, cost_fn=adapt_horizon_cost,
     )
 
     trajectory.to_csv(session_dir / "trajectory.csv", index=False)

@@ -1,8 +1,4 @@
-"""Canonical import path for the chamber TCP protocol.
-
-The wire protocol (packet framing, CRC-16, Pascal strings, settings/state
-requests, PID writes) is implemented in tcp/tcp_common.py and re-exported here.
-"""
+"""Chamber TCP protocol client, re-exported from tcp.tcp_common."""
 
 from __future__ import annotations
 
