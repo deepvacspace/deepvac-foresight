@@ -834,6 +834,7 @@ def optimize_pid_for_state(
                 )
 
     evaluated_rows.sort(key=lambda r: float(r["cost"]))
+    population_costs = np.asarray([float(r["cost"]) for r in evaluated_rows], dtype=float)
     best = dict(evaluated_rows[0])
     best_pid = np.asarray([best["kp"], best["ki"], best["kd"]], dtype=float)
     population = population_summary(evaluated_rows)
